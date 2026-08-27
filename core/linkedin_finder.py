@@ -174,7 +174,8 @@ class LinkedInFinder:
 
     def build_queries(self, keywords: str, location: str = DEFAULT_LOCATION, remote_only: bool = False) -> List[str]:
         """
-        Builds precision queries that specifically target LinkedIn Posts, explicitly excluding /jobs/ pages.
+        Builds precision queries targeting LinkedIn Posts without restrictive exact quotes,
+        allowing high recall of real recruiter hiring posts.
         """
         # Clean slashes, quotes, and punctuation
         kw = re.sub(r'[/\\()|]', ' ', keywords)
@@ -182,14 +183,22 @@ class LinkedInFinder:
         loc = location.replace('"', '').strip() if location else ""
         remote = "remote" if remote_only else ""
 
-        # Query 1: Direct LinkedIn Post URLs only (excluding job boards)
-        q1 = f'site:linkedin.com/posts/ ("hiring" OR "we are hiring" OR "looking for") "{kw}" {loc} {remote} -inurl:jobs'.strip()
-        # Query 2: Feed update / Activity URLs
-        q2 = f'site:linkedin.com/feed/update/ ("hiring" OR "job opening") "{kw}" {loc} {remote} -inurl:jobs'.strip()
-        # Query 3: Broad post keyword match
-        q3 = f'site:linkedin.com/posts/ "{kw}" {loc} hiring -inurl:jobs'.strip()
+        queries = [
+            # Primary: Targeted post search
+            f'site:linkedin.com/posts/ ("hiring" OR "we are hiring" OR "looking for") {kw} {loc} {remote} -inurl:jobs'.strip(),
+            # Secondary: Activity / update posts
+            f'site:linkedin.com/feed/update/ ("hiring" OR "opening") {kw} {loc} {remote} -inurl:jobs'.strip(),
+            # Tertiary: Clean keyword hiring search
+            f'site:linkedin.com/posts/ {kw} {loc} hiring -inurl:jobs'.strip()
+        ]
 
-        return [q1, q2, q3]
+        # Smart Broadening: If complex multi-word query or narrow city, add core skills fallback query
+        words = kw.split()
+        if len(words) > 2:
+            core_kw = " ".join(words[:2])
+            queries.append(f'site:linkedin.com/posts/ ("hiring" OR "looking for") {core_kw} {loc} -inurl:jobs'.strip())
+
+        return queries
 
     def search_hiring_posts(
         self, 
@@ -200,7 +209,7 @@ class LinkedInFinder:
         max_results: int = DEFAULT_MAX_RESULTS
     ) -> List[Dict[str, Any]]:
         """
-        Primary search function: checks cache first, queries multi-tier providers, 
+        Primary search function: checks cache, queries multi-tier providers with smart broadening,
         strips spam, and extracts contact emails, apply links, and required skills.
         """
         cache_key = f"{keywords}::{location}::{remote_only}::{max_results}"
@@ -212,12 +221,10 @@ class LinkedInFinder:
         all_raw = []
 
         for q in queries:
-            # 1. Try Yahoo
             raw = self.search_yahoo(q, max_results=max_results)
             if raw:
                 all_raw.extend(raw)
 
-            # 2. Try Bing if needed
             if len(all_raw) < max_results:
                 raw_bing = self.search_bing(q, max_results=max_results)
                 if raw_bing:
@@ -225,6 +232,13 @@ class LinkedInFinder:
 
             if len(all_raw) >= max_results:
                 break
+
+        # Fallback Broadening: If still 0 results (e.g. niche location or restrictive word), auto-search broader India/Remote
+        if not all_raw and location and location.lower() not in ["india", "remote", ""]:
+            broad_q = f'site:linkedin.com/posts/ ("hiring" OR "looking for") {keywords} India -inurl:jobs'
+            raw_fallback = self.search_yahoo(broad_q, max_results=max_results)
+            if raw_fallback:
+                all_raw.extend(raw_fallback)
 
         # Deduplicate results by URL and strictly enforce post URLs only
         seen_urls = set()
