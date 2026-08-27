@@ -10,12 +10,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import COMMON_SKILLS
 from core.pitch_generator import OutreachPitchGenerator
+from core.matcher import JobMatcher
 
 
 class LinkedInPostExtractor:
     """
     Extracts structured hiring intelligence from any direct LinkedIn Post URL,
-    Feed Update, Share, or Shortlink without requiring a LinkedIn login.
+    Feed Update, Share, or Shortlink and matches it deeply against a candidate's resume.
     """
 
     HEADERS = {
@@ -32,15 +33,24 @@ class LinkedInPostExtractor:
         cls, 
         url: str, 
         skills_taxonomy: Optional[List[str]] = None,
+        candidate_profile: Optional[Dict[str, Any]] = None,
         candidate_name: str = "Candidate",
         candidate_exp_years: int = 2
     ) -> Dict[str, Any]:
         """
         Parses LinkedIn recruiter post URL, extracting author, HR emails, phones,
-        skills, and generates tailored outreach pitches.
+        skills, calculates resume match score % & gaps, and generates customized outreach pitches.
         """
         skills_taxonomy = skills_taxonomy or COMMON_SKILLS
         clean_url = url.split("?")[0].strip()
+
+        # If candidate_profile passed, extract candidate info
+        if candidate_profile:
+            candidate_name = candidate_profile.get("candidate_name", candidate_name)
+            candidate_exp_years = candidate_profile.get("years_of_experience", candidate_exp_years)
+            cand_skills = candidate_profile.get("top_skills", [])
+        else:
+            cand_skills = []
 
         try:
             with httpx.Client(headers=cls.HEADERS, timeout=12.0, follow_redirects=True) as client:
@@ -82,16 +92,28 @@ class LinkedInPostExtractor:
                 role_match = re.search(r'hiring\s+(?:for\s+)?([^\n!.,#]+)', full_text, re.IGNORECASE)
                 role = role_match.group(1).strip() if role_match else (title_str.split("|")[0].strip() if title_str else "Software Engineer")
 
+                # Match against Candidate Resume
+                match_data = {}
+                pitch_skills = skills
+                if cand_skills:
+                    match_data = JobMatcher.calculate_weighted_match(
+                        candidate_skills=cand_skills,
+                        candidate_exp_years=candidate_exp_years if isinstance(candidate_exp_years, int) else 2,
+                        required_skills=skills,
+                        experience_required_str=full_text
+                    )
+                    pitch_skills = match_data.get("matched_skills") or skills
+
                 # Generate customized recruiter pitches
                 pitches = OutreachPitchGenerator.generate_suite(
                     job_title=role,
                     company_name="the Hiring Team",
-                    matched_skills=skills if skills else ["Full Stack Development"],
+                    matched_skills=pitch_skills if pitch_skills else ["Full Stack Development"],
                     candidate_name=candidate_name,
-                    candidate_exp_years=candidate_exp_years
+                    candidate_exp_years=candidate_exp_years if isinstance(candidate_exp_years, int) else 2
                 )
 
-                return {
+                result = {
                     "status": "success",
                     "post_url": clean_url,
                     "author": author,
@@ -103,5 +125,9 @@ class LinkedInPostExtractor:
                     "tailored_outreach_pitches": pitches,
                     "full_post_content": full_text
                 }
+                if match_data:
+                    result["match_analysis"] = match_data
+
+                return result
         except Exception as e:
             return {"error": f"Error parsing post: {str(e)}"}

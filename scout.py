@@ -48,10 +48,21 @@ Examples:
 
     # Mode 0: Direct LinkedIn Post URL Extractor
     if args.post:
+        candidate_profile = None
+        if args.resume:
+            pdf_path = Path(args.resume)
+            if pdf_path.exists():
+                print(f"📄 Parsing Candidate Resume: {pdf_path.name}...")
+                candidate_profile = ResumeParser().parse(str(pdf_path))
+                print(f"   Candidate: {candidate_profile.get('candidate_name')} | Exp: {candidate_profile.get('years_of_experience')} Yrs")
+
         print("=" * 65)
         print(f"🔗 Extracting Intelligence from LinkedIn Post...")
         print("=" * 65)
-        post_data = LinkedInPostExtractor.extract_from_url(args.post)
+        post_data = LinkedInPostExtractor.extract_from_url(
+            url=args.post,
+            candidate_profile=candidate_profile
+        )
         if "error" in post_data:
             print(f"❌ {post_data['error']}")
             return
@@ -61,11 +72,21 @@ Examples:
         print(f"• Location: {post_data.get('location')}")
         print(f"• Recruiter Emails: {', '.join(post_data.get('recruiter_emails', [])) or 'None found'}")
         print(f"• Contact Phone: {', '.join(post_data.get('contact_numbers', [])) or 'None found'}")
-        print(f"• Detected Skills: {', '.join(post_data.get('detected_skills', []))}")
+        print(f"• Post Skills Required: {', '.join(post_data.get('detected_skills', []))}")
+
+        # If matched against resume, show ATS match data
+        if "match_analysis" in post_data:
+            ma = post_data["match_analysis"]
+            print("\n🎯 ATS Match Analysis against Your Resume:")
+            print(f"  • Match Score: {ma['match_score']}% ({ma['match_grade']})")
+            print(f"  • Matched Skills: {', '.join(ma.get('matched_skills', []))}")
+            if ma.get("missing_skills"):
+                print(f"  • Missing Skills to Highlight: {', '.join(ma.get('missing_skills', []))}")
+            if ma.get("ats_recommendations"):
+                print(f"  • ATS Advice: {ma['ats_recommendations'][0]}")
+
         print("\n✉️ Customized Outreach Pitch:")
         print(f"\"{post_data.get('tailored_outreach_pitches', {}).get('linkedin_connection_note_300_chars')}\"")
-        print("\n📄 Full Post Content Preview:")
-        print(post_data.get('full_post_content', '')[:300] + "...")
         return
 
     # Mode 1: Resume Matcher
