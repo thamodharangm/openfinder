@@ -54,20 +54,75 @@ def health_check():
     }
 
 
+from fastapi.responses import JSONResponse, Response, StreamingResponse, RedirectResponse
+
 # ==========================================================
-# 🟢 CLAUDE WEB CUSTOM CONNECTOR (SSE & JSON-RPC DUAL MCP)
+# 🟢 CLAUDE WEB CUSTOM CONNECTOR (OAUTH 2.0 & MCP PROTOCOL)
 # ==========================================================
 
 @app.get("/.well-known/oauth-authorization-server")
+def oauth_auth_server_discovery(request: Request):
+    base_url = str(request.base_url).rstrip("/")
+    return {
+        "issuer": base_url,
+        "authorization_endpoint": f"{base_url}/oauth/authorize",
+        "token_endpoint": f"{base_url}/oauth/token",
+        "registration_endpoint": f"{base_url}/register",
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "client_credentials"],
+        "token_endpoint_auth_methods_supported": ["none", "client_secret_post", "client_secret_basic"],
+        "code_challenge_methods_supported": ["S256", "plain"]
+    }
+
+
 @app.get("/.well-known/oauth-protected-resource")
 @app.get("/.well-known/oauth-protected-resource/{path:path}")
-def oauth_no_auth():
-    return Response(status_code=404)
+def oauth_protected_resource_discovery(request: Request):
+    base_url = str(request.base_url).rstrip("/")
+    return {
+        "resource": base_url,
+        "authorization_servers": [base_url]
+    }
+
+
+@app.get("/oauth/authorize")
+def oauth_authorize(
+    redirect_uri: Optional[str] = None,
+    state: Optional[str] = None,
+    client_id: Optional[str] = None
+):
+    """
+    Instant zero-click auto-authorization for Claude Connectors.
+    """
+    if redirect_uri:
+        sep = "&" if "?" in redirect_uri else "?"
+        state_param = f"&state={state}" if state else ""
+        target = f"{redirect_uri}{sep}code=openfinder_auth_code{state_param}"
+        return RedirectResponse(url=target, status_code=302)
+    return {"status": "authorized", "code": "openfinder_auth_code"}
+
+
+@app.post("/oauth/token")
+async def oauth_token():
+    """
+    Returns valid bearer token to Claude Connectors.
+    """
+    return {
+        "access_token": "openfinder_secure_token",
+        "token_type": "Bearer",
+        "expires_in": 86400
+    }
 
 
 @app.post("/register")
-def dynamic_client_register():
-    return Response(status_code=404)
+def dynamic_client_register(request: Request):
+    base_url = str(request.base_url).rstrip("/")
+    return {
+        "client_id": "openfinder_client",
+        "client_secret": "openfinder_secret",
+        "registration_access_token": "openfinder_reg_token",
+        "registration_client_uri": f"{base_url}/register"
+    }
 
 
 @app.get("/sse")
@@ -125,6 +180,8 @@ async def mcp_message_handler(request: Request):
     params = body.get("params", {})
     client_proto = params.get("protocolVersion", "2024-11-05")
 
+    print(f"📥 [Claude Connector] Received MCP Method: '{method}' (ID: {req_id})")
+
     response_payload = None
 
     # 1. Initialize
@@ -148,6 +205,7 @@ async def mcp_message_handler(request: Request):
 
     # 2. Notifications
     elif method == "notifications/initialized":
+        print("✅ [Claude Connector] Initialized successfully by Claude!")
         return Response(status_code=200)
 
     # 3. Ping
@@ -156,6 +214,7 @@ async def mcp_message_handler(request: Request):
 
     # 4. Tools List
     elif method == "tools/list":
+        print("🛠️ [Claude Connector] Claude requested tools list -> Returning 2 tools")
         response_payload = {
             "jsonrpc": "2.0",
             "id": req_id,
