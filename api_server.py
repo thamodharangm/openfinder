@@ -94,8 +94,38 @@ def oauth_protected_resource_discovery(request: Request):
     }
 
 
+@app.post("/register")
+async def dynamic_client_register(request: Request):
+    """
+    RFC 7591 compliant Dynamic Client Registration for Claude Connectors.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    base_url = get_public_base_url(request)
+    redirect_uris = body.get("redirect_uris", ["https://claude.ai", "https://chatgpt.com"])
+    client_name = body.get("client_name", "Claude")
+
+    import time
+    return {
+        "client_id": "openfinder_client_id",
+        "client_secret": "openfinder_client_secret",
+        "client_name": client_name,
+        "redirect_uris": redirect_uris,
+        "grant_types": ["authorization_code", "client_credentials", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none",
+        "client_id_issued_at": int(time.time()),
+        "client_secret_expires_at": 0,
+        "registration_access_token": "openfinder_reg_token",
+        "registration_client_uri": f"{base_url}/register"
+    }
+
+
 @app.api_route("/oauth/authorize", methods=["GET", "POST"])
-def oauth_authorize(
+async def oauth_authorize(
     request: Request,
     redirect_uri: Optional[str] = None,
     state: Optional[str] = None,
@@ -104,42 +134,42 @@ def oauth_authorize(
     """
     Instant zero-click auto-authorization for Claude Connectors.
     """
-    # Check query params or form data
     if not redirect_uri:
         redirect_uri = request.query_params.get("redirect_uri")
     if not state:
         state = request.query_params.get("state")
 
+    # If sent via form or json in POST
+    if request.method == "POST" and not redirect_uri:
+        try:
+            form_or_json = await request.json()
+            redirect_uri = form_or_json.get("redirect_uri", redirect_uri)
+            state = form_or_json.get("state", state)
+        except Exception:
+            pass
+
     if redirect_uri:
         sep = "&" if "?" in redirect_uri else "?"
         state_param = f"&state={state}" if state else ""
         target = f"{redirect_uri}{sep}code=openfinder_auth_code{state_param}"
-        print(f"🔀 [Claude OAuth] Auto-approving & redirecting Claude to: {target[:60]}...")
+        print(f"🔀 [Claude OAuth] Auto-approving & redirecting Claude to: {target[:70]}...")
         return RedirectResponse(url=target, status_code=302)
+    
     return {"status": "authorized", "code": "openfinder_auth_code"}
 
 
 @app.api_route("/oauth/token", methods=["GET", "POST"])
-async def oauth_token():
+async def oauth_token(request: Request):
     """
-    Returns valid bearer token to Claude Connectors.
+    Returns valid bearer & refresh token to Claude Connectors.
     """
     print("🔑 [Claude OAuth] Dispatched Bearer Access Token to Claude!")
     return {
-        "access_token": "openfinder_secure_token",
+        "access_token": "openfinder_secure_bearer_token",
         "token_type": "Bearer",
-        "expires_in": 86400
-    }
-
-
-@app.post("/register")
-def dynamic_client_register(request: Request):
-    base_url = get_public_base_url(request)
-    return {
-        "client_id": "openfinder_client",
-        "client_secret": "openfinder_secret",
-        "registration_access_token": "openfinder_reg_token",
-        "registration_client_uri": f"{base_url}/register"
+        "expires_in": 86400,
+        "refresh_token": "openfinder_refresh_token",
+        "scope": "read write"
     }
 
 
