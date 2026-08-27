@@ -60,9 +60,18 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse, Redirec
 # 🟢 CLAUDE WEB CUSTOM CONNECTOR (OAUTH 2.0 & MCP PROTOCOL)
 # ==========================================================
 
+def get_public_base_url(request: Request) -> str:
+    """Dynamically resolves the public HTTPS domain when behind tunnels or proxies."""
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or "127.0.0.1:8000"
+    proto = request.headers.get("x-forwarded-proto")
+    if not proto:
+        proto = "https" if any(k in host for k in ["loca.lt", "ngrok", "onrender.com", "railway.app"]) else "http"
+    return f"{proto}://{host}"
+
+
 @app.get("/.well-known/oauth-authorization-server")
 def oauth_auth_server_discovery(request: Request):
-    base_url = str(request.base_url).rstrip("/")
+    base_url = get_public_base_url(request)
     return {
         "issuer": base_url,
         "authorization_endpoint": f"{base_url}/oauth/authorize",
@@ -78,15 +87,16 @@ def oauth_auth_server_discovery(request: Request):
 @app.get("/.well-known/oauth-protected-resource")
 @app.get("/.well-known/oauth-protected-resource/{path:path}")
 def oauth_protected_resource_discovery(request: Request):
-    base_url = str(request.base_url).rstrip("/")
+    base_url = get_public_base_url(request)
     return {
         "resource": base_url,
         "authorization_servers": [base_url]
     }
 
 
-@app.get("/oauth/authorize")
+@app.api_route("/oauth/authorize", methods=["GET", "POST"])
 def oauth_authorize(
+    request: Request,
     redirect_uri: Optional[str] = None,
     state: Optional[str] = None,
     client_id: Optional[str] = None
@@ -94,19 +104,27 @@ def oauth_authorize(
     """
     Instant zero-click auto-authorization for Claude Connectors.
     """
+    # Check query params or form data
+    if not redirect_uri:
+        redirect_uri = request.query_params.get("redirect_uri")
+    if not state:
+        state = request.query_params.get("state")
+
     if redirect_uri:
         sep = "&" if "?" in redirect_uri else "?"
         state_param = f"&state={state}" if state else ""
         target = f"{redirect_uri}{sep}code=openfinder_auth_code{state_param}"
+        print(f"🔀 [Claude OAuth] Auto-approving & redirecting Claude to: {target[:60]}...")
         return RedirectResponse(url=target, status_code=302)
     return {"status": "authorized", "code": "openfinder_auth_code"}
 
 
-@app.post("/oauth/token")
+@app.api_route("/oauth/token", methods=["GET", "POST"])
 async def oauth_token():
     """
     Returns valid bearer token to Claude Connectors.
     """
+    print("🔑 [Claude OAuth] Dispatched Bearer Access Token to Claude!")
     return {
         "access_token": "openfinder_secure_token",
         "token_type": "Bearer",
@@ -116,7 +134,7 @@ async def oauth_token():
 
 @app.post("/register")
 def dynamic_client_register(request: Request):
-    base_url = str(request.base_url).rstrip("/")
+    base_url = get_public_base_url(request)
     return {
         "client_id": "openfinder_client",
         "client_secret": "openfinder_secret",
