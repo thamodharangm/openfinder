@@ -74,7 +74,7 @@ def dynamic_client_register():
 @app.get("/mcp")
 async def mcp_sse_endpoint(request: Request):
     """
-    Standard MCP SSE Transport for Claude Web Connectors.
+    Standard MCP SSE Transport for Claude Web Connectors (GET /sse or GET /mcp).
     """
     session_id = str(uuid.uuid4())
     queue = asyncio.Queue()
@@ -107,12 +107,13 @@ async def mcp_sse_endpoint(request: Request):
     )
 
 
+@app.post("/sse")
 @app.post("/messages")
 @app.post("/")
 @app.post("/mcp")
 async def mcp_message_handler(request: Request):
     """
-    Handles JSON-RPC 2.0 messages from Claude Connectors.
+    Handles JSON-RPC 2.0 messages from Claude Connectors (POST /sse, POST /mcp, POST /messages).
     """
     try:
         body = await request.json()
