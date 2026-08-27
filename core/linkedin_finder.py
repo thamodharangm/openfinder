@@ -182,18 +182,23 @@ class LinkedInFinder:
     @staticmethod
     def is_valid_post_url(url: str) -> bool:
         """
-        Ensures the URL is strictly a personal recruiter/founder LinkedIn POST or Activity update,
-        and completely filters out generic job boards (/jobs/, /directory/, /company/).
+        Ensures the URL is STRICTLY and ONLY a genuine LinkedIn personal recruiter/founder POST or Activity update.
+        Completely rejects any non-LinkedIn website and any generic /jobs/ board listings.
         """
         if not url:
             return False
         url_lower = url.lower()
 
-        # Explicitly ban generic job aggregator / company directories
-        if any(forbidden in url_lower for forbidden in ['/jobs/', '/job/', '/directory/', '/salary/', '/school/']):
+        # 1. Must strictly be on the LinkedIn domain
+        if "linkedin.com" not in url_lower:
             return False
 
-        # Strictly require genuine post or activity paths
+        # 2. Explicitly ban generic job aggregators, directories, pulse articles, or company pages
+        forbidden_patterns = ['/jobs/', '/job/', '/directory/', '/salary/', '/school/', '/learning/', '/pulse/']
+        if any(forbidden in url_lower for forbidden in forbidden_patterns):
+            return False
+
+        # 3. Strictly require genuine personal/company hiring post or activity feed update paths
         return bool('/posts/' in url_lower or '/feed/update/' in url_lower or 'activity-' in url_lower)
 
     def build_queries(self, keywords: str, location: str = DEFAULT_LOCATION, remote_only: bool = False) -> List[str]:
