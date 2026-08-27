@@ -1,52 +1,106 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 180" width="100%" height="100%">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 580 140" width="100%" height="100%">
   <defs>
-    <!-- Subtle linear gradient for modern soft look -->
-    <linearGradient id="finderGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0A66C2"/>
-      <stop offset="100%" stop-color="#0284C7"/>
+    <style>
+      .brand-title {
+        fill: #0F172A;
+      }
+      .tagline-text {
+        fill: #64748B;
+      }
+      .badge-bg {
+        fill: #0284C7;
+        fill-opacity: 0.08;
+        stroke: #0284C7;
+      }
+      .badge-text {
+        fill: #0284C7;
+      }
+      @media (prefers-color-scheme: dark) {
+        .brand-title {
+          fill: #F8FAFC;
+        }
+        .tagline-text {
+          fill: #94A3B8;
+        }
+        .badge-bg {
+          fill: #38BDF8;
+          fill-opacity: 0.15;
+          stroke: #38BDF8;
+        }
+        .badge-text {
+          fill: #38BDF8;
+        }
+      }
+    </style>
+
+    <!-- Vibrant Modern Blue Gradient -->
+    <linearGradient id="rocketBlue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#0A66C2"/>
     </linearGradient>
-    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#0A66C2" flood-opacity="0.12"/>
-    </filter>
+
+    <!-- Warm Thrust Flame Gradient -->
+    <linearGradient id="flameGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F59E0B"/>
+      <stop offset="100%" stop-color="#EF4444"/>
+    </linearGradient>
+
+    <!-- Text Highlight Gradient -->
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#38BDF8"/>
+    </linearGradient>
   </defs>
 
-  <!-- Logo Mark Container -->
-  <g transform="translate(30, 25)">
-    <!-- Rounded Squircle Badge -->
-    <rect x="0" y="0" width="130" height="130" rx="32" fill="#0F172A" filter="url(#softShadow)"/>
-    <rect x="1" y="1" width="128" height="128" rx="31" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1.5"/>
+  <!-- ROCKET LAUNCH ICON (Firing Upwards) -->
+  <g transform="translate(45, 10)">
+    <!-- Exhaust Thrust Flames (Firing Down / Upward Propulsion) -->
+    <!-- Outer Flame -->
+    <path d="M 40 82 Q 40 114 36 122 Q 40 112 44 122 Q 40 114 40 82 Z" fill="url(#flameGrad)" opacity="0.95"/>
+    <!-- Inner Core Flame -->
+    <path d="M 40 82 Q 40 102 38 108 Q 40 100 42 108 Q 40 102 40 82 Z" fill="#FDE047"/>
+    <!-- Propulsion Speed Particles -->
+    <circle cx="34" cy="116" r="2.5" fill="#F59E0B" opacity="0.6"/>
+    <circle cx="46" cy="118" r="2" fill="#F59E0B" opacity="0.6"/>
+    <circle cx="40" cy="126" r="1.5" fill="#EF4444" opacity="0.5"/>
 
-    <!-- Minimal Viewfinder Aperture (Scout / Target) -->
-    <!-- Top-Left Corner -->
-    <path d="M38 52 V42 H48" fill="none" stroke="#94A3B8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-    <!-- Top-Right Corner -->
-    <path d="M82 42 H92 V52" fill="none" stroke="#94A3B8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-    <!-- Bottom-Left Corner -->
-    <path d="M38 78 V88 H48" fill="none" stroke="#94A3B8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-    <!-- Bottom-Right Corner -->
-    <path d="M82 88 H92 V78" fill="none" stroke="#94A3B8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Left Rocket Fin -->
+    <path d="M 28 62 L 14 78 Q 22 80 28 72 Z" fill="url(#rocketBlue)"/>
+    <!-- Right Rocket Fin -->
+    <path d="M 52 62 L 66 78 Q 58 80 52 72 Z" fill="url(#rocketBlue)"/>
 
-    <!-- Center Radar Pulse / Finder Circle -->
-    <circle cx="65" cy="65" r="15" fill="none" stroke="url(#finderGradient)" stroke-width="3"/>
-    <circle cx="65" cy="65" r="5" fill="url(#finderGradient)"/>
+    <!-- Rocket Body (Sleek Aerodynamic Cone) -->
+    <path d="M 40 14 C 26 36 24 64 28 82 L 52 82 C 56 64 54 36 40 14 Z" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="1.5"/>
 
-    <!-- Dynamic Discovery Spark -->
-    <circle cx="86" cy="44" r="3.5" fill="#38BDF8"/>
+    <!-- Rocket Nosecone Tip -->
+    <path d="M 40 14 C 33 26 31 36 31 40 L 49 40 C 49 36 47 26 40 14 Z" fill="url(#rocketBlue)"/>
+
+    <!-- Rocket Porthole Window -->
+    <circle cx="40" cy="54" r="6.5" fill="#0F172A" stroke="url(#rocketBlue)" stroke-width="2"/>
+    <circle cx="40" cy="54" r="3.5" fill="#38BDF8"/>
+    <!-- Window Glint -->
+    <circle cx="38.5" cy="52.5" r="1" fill="#FFFFFF"/>
+
+    <!-- Speed Sparks -->
+    <path d="M 18 36 L 22 34" stroke="#38BDF8" stroke-width="2" stroke-linecap="round" opacity="0.7"/>
+    <path d="M 62 36 L 58 34" stroke="#38BDF8" stroke-width="2" stroke-linecap="round" opacity="0.7"/>
+    <circle cx="16" cy="24" r="1.5" fill="#38BDF8" opacity="0.8"/>
+    <circle cx="64" cy="24" r="1.5" fill="#38BDF8" opacity="0.8"/>
   </g>
 
-  <!-- Typography / Brand Name -->
-  <g transform="translate(185, 30)">
+  <!-- BRAND TYPOGRAPHY & BADGES -->
+  <g transform="translate(145, 20)">
     <!-- Main Title: OpenFinder -->
-    <text x="0" y="62" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="52" font-weight="700" fill="#0F172A" letter-spacing="-1">
-      Open<tspan fill="url(#finderGradient)">Finder</tspan>
+    <text x="0" y="58" class="brand-title" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', sans-serif" font-size="46" font-weight="800" letter-spacing="-0.5">
+      Open<tspan fill="url(#textGrad)">Finder</tspan>
     </text>
 
-    <!-- Clean Badge Tag: MCP v2.0 -->
-    <rect x="290" y="24" width="76" height="24" rx="12" fill="#F1F5F9" stroke="#E2E8F0" stroke-width="1"/>
-    <text x="328" y="40" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="11" font-weight="700" fill="#0A66C2" text-anchor="middle" letter-spacing="0.5">MCP 2.0</text>
+    <!-- Sleek Minimalist MCP 2.0 Pill Badge -->
+    <rect x="272" y="24" width="74" height="24" rx="12" class="badge-bg" stroke-width="1.2"/>
+    <text x="309" y="40.5" class="badge-text" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', sans-serif" font-size="11" font-weight="700" text-anchor="middle" letter-spacing="0.5">MCP 2.0</text>
 
     <!-- Subtitle / Tagline -->
-    <text x="2" y="94" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="500" fill="#64748B" letter-spacing="1.8">
+    <text x="2" y="86" class="tagline-text" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', sans-serif" font-size="13.5" font-weight="600" letter-spacing="2.2">
       AI LINKEDIN SCOUT &amp; ATS MATCHER
     </text>
   </g>
