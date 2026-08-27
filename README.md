@@ -2,16 +2,17 @@
   <img src="openfinderlogo.svg" alt="OpenFinder Logo" width="220" />
 </p>
 
-<h1 align="center">🎯 OpenFinder v2.0 - Universal AI Career & LinkedIn Scout</h1>
+<h1 align="center">🎯 OpenFinder v2.0 - Universal AI LinkedIn Scout & Recruiter Intelligence</h1>
 
 <p align="center">
-  <strong>Open-Source Real-Time Job Scout, Resume Matcher & Recruiter Intelligence Engine</strong><br>
+  <strong>Open-Source Real-Time LinkedIn Posts Scout, Resume ATS Matcher & Recruiter Outreach Engine</strong><br>
   <em>Plug & Play with Claude Desktop, ChatGPT Actions, Cursor, Windsurf & Python CLI</em>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10+-blue.svg" />
   <img src="https://img.shields.io/badge/MCP-Protocol-purple.svg" />
+  <img src="https://img.shields.io/badge/LinkedIn-Posts_Tab_Search-0077B5.svg" />
   <img src="https://img.shields.io/badge/ChatGPT-OpenAPI_Action-74aa9c.svg" />
   <img src="https://img.shields.io/badge/Claude-Desktop_&_Web-orange.svg" />
   <img src="https://img.shields.io/badge/FastAPI-v0.110+-009688.svg" />
@@ -22,16 +23,17 @@
 
 ## 💡 What is OpenFinder?
 
-**OpenFinder** is a free, open-source AI scout that bridges **Claude**, **ChatGPT**, and **AI Coding IDEs** directly to real-time LinkedIn hiring posts and job listings.
+**OpenFinder** is a free, open-source AI scout that bridges **Claude**, **ChatGPT**, and **AI Coding IDEs** directly to real-time LinkedIn hiring posts, recruiter social updates, and resume ATS intelligence.
 
-- 🔍 **Live LinkedIn Search**: 100% real-time verified jobs with direct clickable apply links (`https://in.linkedin.com/jobs/view/...`).
+- 🔍 **`search_posts` (The "Posts" Tab)**: Search LinkedIn posts/content globally with recency filters (`past-24h`, `past-week`, `past-month`) to discover unlisted and informal recruiter hiring announcements.
+- 🎯 **`parse_linkedin_post`**: Extracts author, company, raw post text, direct HR contact emails, phone numbers, and required tech stack from any post URL.
 - 📄 **Deep Resume PDF Parser**: Extracts categorized tech stack (Frontend, Backend, Cloud, DBs), experience, and target roles.
-- 🎯 **ATS Match & Gap Scoring**: Computes multidimensional match % and suggests actionable resume tailoring points.
-- ✉️ **AI Outreach Suite**: Generates 4 recruiter-converting formats (300-char LinkedIn Connection Notes, InMail DMs, Cover Emails, Follow-ups).
+- 📊 **ATS Match & Gap Scoring**: Computes multidimensional match % and identifies missing skills.
+- ✉️ **Personalized Outreach Suite**: Generates 4 recruiter-converting formats (300-char LinkedIn Connection Notes, InMail DMs, Cover Emails with pre-filled HR email, and Follow-ups).
 
 ---
 
-## ⚡ Quick Start (In 30 Seconds)
+## ⚡ Quick Start CLI
 
 ### 1. Clone & Install
 ```bash
@@ -40,14 +42,31 @@ cd openfinder
 pip install -r requirements.txt
 ```
 
-### 2. Run Instant Search in Terminal
-```bash
-# Search by Role & Location
-python scout.py "React Developer" "Bangalore"
+### 2. Run in Terminal
 
-# Match against your Resume PDF
-python scout.py --resume "D:/my_resume.pdf" --location "Chennai"
+```bash
+# 1. Search LinkedIn Posts (Recency: past-24h / past-week / past-month)
+python scout.py --search-posts "React Developer hiring Bangalore" --date-posted past-24h
+
+# 2. Extract HR Emails & Generate Outreach Pitch from any LinkedIn Post URL
+python scout.py --post "https://www.linkedin.com/posts/codernkb_hiring-mernstack-developerintern-share-7497921508342878208-3o-y"
+
+# 3. Match a LinkedIn Post against your Resume PDF
+python scout.py --post "https://www.linkedin.com/posts/..." --resume "my_resume.pdf"
 ```
+
+---
+
+## 🛠️ MCP Tools Overview
+
+| MCP Tool | Description |
+| :--- | :--- |
+| `search_posts` | Search LinkedIn posts/content globally by keyword (the "Posts" tab) with recency filters (`past-24h`, `past-week`, `past-month`). |
+| `parse_linkedin_post` | Extract HR emails, contact numbers, required tech stack & generate pitches from any LinkedIn post URL. |
+| `search_hiring_posts` | Find verified live recruiter hiring posts with mode and location filters. |
+| `parse_resume` | Parse candidate PDF resume into structured profile, skills, and target roles. |
+| `match_resume_to_jobs` | Run full ATS matching pipeline scoring resume against live recruiter posts. |
+| `generate_recruiter_pitch` | Generate tailored connection notes (<300 chars), InMails, formal cover emails, and follow-ups. |
 
 ---
 
@@ -75,9 +94,7 @@ Add OpenFinder to your Claude Desktop config:
   }
 }
 ```
-*(Replace the path with your local folder path using forward slashes `/`).*
-
-**Restart Claude Desktop** — The 🔨 tool icon will appear automatically!
+*(Replace the path with your local directory path).*
 </details>
 
 <details open>
@@ -88,8 +105,7 @@ Add OpenFinder to your Claude Desktop config:
    python api_server.py
    ```
 2. In ChatGPT, create a **Custom GPT** ➡️ Go to **Configure** ➡️ **Actions** ➡️ **Create new action**.
-3. Import the OpenAPI schema from [`chatgpt_openapi_schema.json`](file:///d:/projects/research/linkedin-job-scout-mcp/chatgpt_openapi_schema.json) or paste your server URL (e.g. deployed on Render / ngrok).
-4. Save and start chatting!
+3. Import the OpenAPI schema from [`chatgpt_openapi_schema.json`](chatgpt_openapi_schema.json) or paste your live Render deployment URL.
 </details>
 
 <details open>
@@ -98,54 +114,19 @@ Add OpenFinder to your Claude Desktop config:
 In Cursor or Windsurf settings ➡️ **Features** ➡️ **MCP Servers** ➡️ **Add New MCP Server**:
 - **Name**: `openfinder`
 - **Type**: `command`
-- **Command**: `python d:/projects/research/linkedin-job-scout-mcp/server.py`
+- **Command**: `python D:/projects/research/linkedin-job-scout-mcp/server.py`
 </details>
 
 ---
 
-## 🗣️ Example Prompts to Ask AI
+## 🌐 Deploy to Render (1-Click Free Hosting)
 
-Once connected to Claude or ChatGPT, you can ask natural language questions:
-
-- 🔹 *"Find 5 recent Remote React Developer jobs on LinkedIn."*
-- 🔹 *"Here is my resume at `D:/my_resume.pdf`. Find top 5 matching Python Backend jobs in Bangalore with ATS score > 70%."*
-- 🔹 *"Write a personalized LinkedIn connection note under 300 characters for the top matched job."*
-
----
-
-## 🛠️ MCP Tools & API Endpoints
-
-| Tool / Endpoint | Purpose | Inputs |
-|---|---|---|
-| `search_linkedin_hiring` / `GET /api/search-hiring-posts` | Finds live verified LinkedIn jobs with apply links & skills. | `keywords`, `location`, `remote_only`, `max_results` |
-| `search_jobs_by_resume` / `POST /api/search-jobs-by-resume` | Analyzes PDF resume + finds & ranks matching jobs by ATS %. | `resume_path` (or file upload), `location` |
-| `parse_resume` / `POST /api/parse-resume` | Categorizes candidate skills, experience level, target roles. | `pdf_path` (or file upload) |
-| `generate_recruiter_pitch` / `POST /api/generate-pitch` | Generates Connection notes (<300 chars), InMail, Cover Emails. | `job_title`, `company_name`, `matched_skills` |
+OpenFinder includes [`render.yaml`](render.yaml) & [`Dockerfile`](Dockerfile) for instant cloud deployment:
+1. Push to GitHub.
+2. Link your repository in [Render Dashboard](https://dashboard.render.com).
+3. Access interactive Swagger UI at `https://<YOUR-RENDER-URL>/docs`.
 
 ---
 
-## 📂 Project Architecture
-
-```text
-linkedin-job-scout-mcp/
-├── server.py                   # Standard FastMCP stdio server (Claude Desktop, Cursor)
-├── api_server.py               # Dual-protocol REST & SSE server (ChatGPT Actions, Web)
-├── scout.py                    # Dead-simple CLI search & resume matcher
-├── test_pipeline.py            # Automated end-to-end test suite
-├── chatgpt_openapi_schema.json # Plug-and-play ChatGPT action schema
-├── claude_desktop_config.json  # 1-click Claude Desktop config snippet
-├── core/
-│   ├── linkedin_finder.py      # Direct live LinkedIn guest search & skill extraction
-│   ├── resume_parser.py        # PDF skill categorization & experience estimator
-│   ├── matcher.py              # Multi-dimensional ATS match engine
-│   ├── pitch_generator.py      # Recruiter outreach message suite
-│   ├── cache.py                # Local SQLite sub-second response cache
-│   └── spam_filter.py          # Engagement bait & spam remover
-├── config.py                   # Taxonomy rules & search defaults
-└── requirements.txt            # Python dependencies
-```
-
----
-
-## 📄 License
-MIT License - Free and open-source for all developers and job seekers worldwide.
+## 📜 License
+MIT License. Built for open-source AI job seekers and career scouts.

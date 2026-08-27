@@ -528,6 +528,31 @@ def parse_post_endpoint(
     )
 
 
+@app.get("/api/search-posts", tags=["Post Search"])
+@app.post("/api/search-posts", tags=["Post Search"])
+def search_posts_endpoint(
+    keywords: str = Query(..., description="Post keywords (e.g. 'React Developer hiring Bangalore')"),
+    date_posted: str = Query("past-week", description="Recency filter ('past-24h', 'past-week', 'past-month')"),
+    max_results: int = Query(10, description="Max posts to retrieve")
+) -> Dict[str, Any]:
+    """
+    Searches LinkedIn posts/content globally by keyword (the "Posts" tab) with recency filters.
+    """
+    finder = LinkedInFinder()
+    results = finder.search_posts(
+        keywords=keywords,
+        date_posted=date_posted,
+        max_results=max_results
+    )
+    return {
+        "status": "success",
+        "count": len(results),
+        "query": keywords,
+        "date_posted": date_posted,
+        "posts": results
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     print("🚀 Starting OpenFinder v2.0 Universal Dual Protocol Server on http://127.0.0.1:8000 ...")

@@ -28,10 +28,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python scout.py --post "https://www.linkedin.com/posts/..."
+  python scout.py --search-posts "React Developer hiring Bangalore" --date-posted past-24h
   python scout.py --post "https://www.linkedin.com/posts/..." --resume my_resume.pdf
-  python scout.py "React Developer" "Bangalore"
-  python scout.py --resume my_resume.pdf --location "Chennai"
+  python scout.py "Python FastAPI" "Remote"
         """
     )
     parser.add_argument("role", nargs="?", default="Software Engineer", help="Job role / keywords (e.g. 'React Developer', 'Python Django')")
@@ -39,12 +38,42 @@ Examples:
     parser.add_argument("--location", "-l", type=str, default=None, help="Location (e.g. 'Bangalore', 'Chennai', 'Remote', 'India')")
     parser.add_argument("--resume", "-r", type=str, help="Path to candidate resume PDF for instant ATS match analysis")
     parser.add_argument("--post", "-p", type=str, help="Direct LinkedIn post URL to extract HR email, phone & generate pitch")
+    parser.add_argument("--search-posts", "--sp", type=str, help="Search LinkedIn posts globally (the 'Posts' tab)")
+    parser.add_argument("--date-posted", "-d", type=str, default="past-week", choices=["past-24h", "past-week", "past-month"], help="Recency filter ('past-24h', 'past-week', 'past-month')")
     parser.add_argument("--results", "-n", type=int, default=5, help="Number of job posts to fetch (default: 5)")
     parser.add_argument("--remote", action="store_true", help="Filter for remote jobs only")
 
     args = parser.parse_args()
     finder = LinkedInFinder()
     target_location = args.location or args.pos_location or "India"
+
+    # Mode 0A: Global Search Posts (Posts Tab)
+    if args.search_posts:
+        print("=" * 65)
+        print(f"🔍 Searching LinkedIn Posts: '{args.search_posts}' (Filter: {args.date_posted})...")
+        print("=" * 65)
+        posts = finder.search_posts(
+            keywords=args.search_posts,
+            date_posted=args.date_posted,
+            max_results=args.results
+        )
+        if not posts:
+            print("⚠️ No LinkedIn posts found matching this query in cache or search mirrors.")
+            return
+
+        print(f"✅ Found {len(posts)} Posts:\n")
+        for idx, p in enumerate(posts, 1):
+            print(f"[{idx}] {p.get('job_role', 'Post')} by {p.get('author')}")
+            print(f"    🏢 Company: {p.get('company')} | 📍 Location: {p.get('location')}")
+            if p.get("recruiter_emails"):
+                print(f"    📧 Email: {', '.join(p['recruiter_emails'])}")
+            if p.get("contact_numbers"):
+                print(f"    📞 Phone: {', '.join(p['contact_numbers'])}")
+            if p.get("detected_skills"):
+                print(f"    🛠️ Skills: {', '.join(p['detected_skills'])}")
+            print(f"    🔗 Post URL: {p.get('post_url')}")
+            print("-" * 65)
+        return
 
     # Mode 0: Direct LinkedIn Post URL Extractor
     if args.post:

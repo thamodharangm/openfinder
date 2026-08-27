@@ -175,3 +175,77 @@ class LinkedInFinder:
             self.cache.set(cache_key, parsed_posts)
 
         return parsed_posts
+
+    def search_posts(
+        self,
+        keywords: str,
+        date_posted: Optional[str] = "past-week",
+        max_results: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Search LinkedIn posts/content globally by keyword (the 'Posts' tab) 
+        with an optional recency filter (past-24h, past-week, past-month).
+        
+        Extracts full post text, author, hiring company, HR contact emails,
+        phone numbers, required skills, and tailored recruiter pitches.
+        """
+        # Map date_posted to time constraint
+        age_param = "1w"
+        if date_posted:
+            dp_lower = date_posted.lower()
+            if "24h" in dp_lower or "day" in dp_lower:
+                age_param = "1d"
+            elif "month" in dp_lower:
+                age_param = "1m"
+            elif "week" in dp_lower:
+                age_param = "1w"
+
+        cache_key = f"search_posts::{keywords}::{date_posted}::{max_results}"
+        cached = self.cache.get(cache_key)
+        if cached is not None and len(cached) > 0:
+            return cached
+
+        # Clean keywords
+        clean_kw = re.sub(r'[/\\()|]', ' ', keywords)
+        clean_kw = re.sub(r'\s+', ' ', clean_kw).replace('"', '').strip()
+
+        queries = [
+            f'site:linkedin.com/posts {clean_kw}',
+            f'site:linkedin.com/feed/update {clean_kw}',
+            f'site:linkedin.com/posts {clean_kw} "hiring"',
+            f'site:linkedin.com {clean_kw} inurl:posts'
+        ]
+
+        found_urls = []
+        for q in queries:
+            try:
+                url = "https://search.yahoo.com/search"
+                params = {"p": q, "n": max_results * 2, "age": age_param, "bt": age_param}
+                with httpx.Client(headers=self.headers, timeout=10.0, follow_redirects=True) as client:
+                    resp = client.get(url, params=params)
+                    if resp.status_code == 200:
+                        soup = BeautifulSoup(resp.text, "html.parser")
+                        for a in soup.find_all("a"):
+                            raw_href = a.get("href", "")
+                            clean_href = self.clean_linkedin_url(raw_href)
+                            if self.is_valid_recruiter_post_url(clean_href):
+                                if clean_href not in found_urls:
+                                    found_urls.append(clean_href)
+            except Exception:
+                pass
+            if len(found_urls) >= max_results:
+                break
+
+        parsed_results = []
+        for p_url in found_urls[:max_results]:
+            post_info = LinkedInPostExtractor.extract_from_url(
+                url=p_url,
+                skills_taxonomy=self.skills_taxonomy
+            )
+            if post_info and "error" not in post_info:
+                parsed_results.append(post_info)
+
+        if parsed_results:
+            self.cache.set(cache_key, parsed_results)
+
+        return parsed_results

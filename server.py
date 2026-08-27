@@ -198,11 +198,33 @@ def parse_linkedin_post(
         candidate_name: Your name for the pitch sign-off.
         candidate_exp_years: Your years of experience.
     """
-    return LinkedInPostExtractor.extract_from_url(
-        url=post_url,
-        candidate_name=candidate_name,
-        candidate_exp_years=candidate_exp_years
+@mcp.tool()
+def search_posts(
+    keywords: str,
+    date_posted: Optional[str] = "past-week",
+    max_results: int = 10
+) -> Dict[str, Any]:
+    """
+    Search LinkedIn posts/content globally by keyword (the "Posts" tab) with an optional recency filter.
+    
+    Args:
+        keywords: Search query (e.g. 'React Developer hiring Bangalore', 'looking for MERN developer').
+        date_posted: Recency filter ('past-24h', 'past-week', 'past-month'). Default is 'past-week'.
+        max_results: Maximum number of posts to fetch (default: 10).
+    """
+    finder = LinkedInFinder()
+    results = finder.search_posts(
+        keywords=keywords,
+        date_posted=date_posted,
+        max_results=max_results
     )
+    return {
+        "status": "success",
+        "count": len(results),
+        "query": keywords,
+        "date_posted": date_posted,
+        "posts": results
+    }
 
 
 if __name__ == "__main__":
