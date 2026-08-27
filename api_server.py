@@ -41,17 +41,174 @@ linkedin_finder = LinkedInFinder()
 def health_check():
     return {
         "status": "online",
-        "version": "2.0.0 - Professional Suite",
-        "capabilities": [
-            "Categorized Resume Intelligence",
-            "Multi-Provider Live LinkedIn Hiring Search",
-            "Weighted Multi-Dimensional Job Matching",
-            "Multi-Format Recruiter Outreach Suite",
-            "Sub-Second SQLite Caching"
-        ],
+        "service": "OpenFinder Universal AI Connector",
+        "chatgpt_actions_ready": True,
+        "claude_connectors_ready": True,
         "docs_url": "/docs",
         "openapi_url": "/openapi.json"
     }
+
+
+# ==========================================
+# 🟢 CLAUDE WEB CUSTOM CONNECTOR (MCP PROTOCOL)
+# ==========================================
+
+@app.get("/.well-known/oauth-authorization-server", tags=["Claude"])
+@app.get("/.well-known/oauth-protected-resource", tags=["Claude"])
+def oauth_discovery():
+    # Signal to Claude that no OAuth login wall is required
+    return {"token_endpoint": None, "authorization_endpoint": None}
+
+
+@app.post("/register", tags=["Claude"])
+def dynamic_client_register():
+    return {"client_id": "openfinder-client", "client_secret": "openfinder-secret"}
+
+
+@app.post("/", tags=["Claude"])
+@app.post("/mcp", tags=["Claude"])
+async def mcp_jsonrpc_endpoint(request: dict):
+    """
+    Handles native JSON-RPC 2.0 MCP requests sent by Claude Web Custom Connectors.
+    """
+    req_id = request.get("id")
+    method = request.get("method")
+    params = request.get("params", {})
+
+    # 1. Initialize
+    if method == "initialize":
+        return {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {
+                    "tools": {}
+                },
+                "serverInfo": {
+                    "name": "openfinder",
+                    "version": "2.0.0"
+                }
+            }
+        }
+
+    # 2. Initialized Notification
+    if method == "notifications/initialized":
+        return {"jsonrpc": "2.0", "result": {}}
+
+    # 3. Ping
+    if method == "ping":
+        return {"jsonrpc": "2.0", "id": req_id, "result": {}}
+
+    # 4. List Tools
+    if method == "tools/list":
+        return {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "tools": [
+                    {
+                        "name": "search_hiring_posts",
+                        "description": "Searches recent live LinkedIn recruiter hiring posts (past 7 days only, excluding generic job boards) with post links, emails, and requirements.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "keywords": {
+                                    "type": "string",
+                                    "description": "Job role or technical skill (e.g. 'React Developer', 'Python Backend')"
+                                },
+                                "location": {
+                                    "type": "string",
+                                    "description": "Location (e.g. 'Bangalore', 'Remote', 'India')",
+                                    "default": "India"
+                                },
+                                "max_results": {
+                                    "type": "integer",
+                                    "description": "Max posts to fetch (default 10)",
+                                    "default": 10
+                                }
+                            },
+                            "required": ["keywords"]
+                        }
+                    },
+                    {
+                        "name": "generate_recruiter_pitch",
+                        "description": "Generates 4 personalized, high-converting outreach message formats (LinkedIn Connection Note <300 chars, InMail, Formal Cover Email, Follow-Up).",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "job_title": { "type": "string", "description": "Target job title" },
+                                "company_name": { "type": "string", "description": "Company name", "default": "Hiring Team" },
+                                "matched_skills": { "type": "string", "description": "Key skills (e.g. 'React, Node.js')", "default": "React" },
+                                "candidate_name": { "type": "string", "description": "Your name", "default": "Candidate" }
+                            },
+                            "required": ["job_title"]
+                        }
+                    }
+                ]
+            }
+        }
+
+    # 5. Call Tool
+    if method == "tools/call":
+        tool_name = params.get("name")
+        args = params.get("arguments", {})
+
+        if tool_name == "search_hiring_posts":
+            keywords = args.get("keywords", "React Developer")
+            location = args.get("location", "India")
+            max_results = args.get("max_results", 10)
+
+            posts = linkedin_finder.search_hiring_posts(
+                keywords=keywords,
+                location=location,
+                timeframe="w",
+                max_results=max_results
+            )
+            
+            import json
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps({"status": "success", "count": len(posts), "posts": posts}, indent=2)
+                        }
+                    ]
+                }
+            }
+
+        if tool_name == "generate_recruiter_pitch":
+            from core.pitch_generator import OutreachPitchGenerator
+            job_title = args.get("job_title", "Software Engineer")
+            company_name = args.get("company_name", "Hiring Team")
+            matched_skills = [s.strip() for s in args.get("matched_skills", "React").split(",")]
+            candidate_name = args.get("candidate_name", "Candidate")
+
+            pitches = OutreachPitchGenerator.generate_suite(
+                job_title=job_title,
+                company_name=company_name,
+                matched_skills=matched_skills,
+                candidate_name=candidate_name
+            )
+            
+            import json
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps({"status": "success", "pitches": pitches}, indent=2)
+                        }
+                    ]
+                }
+            }
+
+    return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": f"Method '{method}' not found"}}
 
 
 @app.post("/api/parse-resume", tags=["Resume"])
