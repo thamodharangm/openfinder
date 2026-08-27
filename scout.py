@@ -33,13 +33,15 @@ Examples:
         """
     )
     parser.add_argument("role", nargs="?", default="Software Engineer", help="Job role / keywords (e.g. 'React Developer', 'Python Django')")
-    parser.add_argument("location", nargs="?", default="India", help="Location (e.g. 'Bangalore', 'Chennai', 'Remote', 'India')")
+    parser.add_argument("pos_location", nargs="?", default=None, help="Location positional arg (e.g. 'Bangalore', 'Chennai')")
+    parser.add_argument("--location", "-l", type=str, default=None, help="Location (e.g. 'Bangalore', 'Chennai', 'Remote', 'India')")
     parser.add_argument("--resume", "-r", type=str, help="Path to candidate resume PDF for instant ATS match analysis")
     parser.add_argument("--results", "-n", type=int, default=5, help="Number of job posts to fetch (default: 5)")
     parser.add_argument("--remote", action="store_true", help="Filter for remote jobs only")
 
     args = parser.parse_args()
     finder = LinkedInFinder()
+    target_location = args.location or args.pos_location or "India"
 
     # Mode 1: Resume Matcher
     if args.resume:
@@ -64,10 +66,10 @@ Examples:
         if len(top_skills) >= 2:
             search_kw = f"{top_skills[0]} {top_skills[1]}"
 
-        print(f"\n🔍 Searching Live Matching Jobs ({search_kw} in {args.location})...")
+        print(f"\n🔍 Searching Live Matching Jobs ({search_kw} in {target_location})...")
         posts = finder.search_hiring_posts(
             keywords=search_kw,
-            location=args.location,
+            location=target_location,
             remote_only=args.remote,
             max_results=args.results * 2
         )
@@ -87,12 +89,12 @@ Examples:
     # Mode 2: Direct Keyword Search
     else:
         print("=" * 65)
-        print(f"🔍 Searching Live LinkedIn Jobs: '{args.role}' in '{args.location}'...")
+        print(f"🔍 Searching Live LinkedIn Jobs: '{args.role}' in '{target_location}'...")
         print("=" * 65)
 
         posts = finder.search_hiring_posts(
             keywords=args.role,
-            location=args.location,
+            location=target_location,
             remote_only=args.remote,
             max_results=args.results
         )
