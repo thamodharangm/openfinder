@@ -11,16 +11,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import COMMON_SKILLS, DEFAULT_LOCATION, DEFAULT_TIMEFRAME, DEFAULT_MAX_RESULTS
 from core.spam_filter import is_spam_or_bait
 from core.post_parser import PostParser
+from core.cache import SearchCache
 
 
 class LinkedInFinder:
     """
     Finds real-time LinkedIn hiring posts using multi-provider pure Python search.
     Completely avoids native DLL conflicts and rate limit walls.
+    Integrates local cache for instant sub-second responses.
     """
 
     def __init__(self, skills_taxonomy: Optional[List[str]] = None):
         self.skills_taxonomy = skills_taxonomy or COMMON_SKILLS
+        self.cache = SearchCache()
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
@@ -118,7 +121,9 @@ class LinkedInFinder:
         """
         Builds multiple search queries from specific post targets to broader hiring threads.
         """
-        kw = keywords.replace('"', '').strip()
+        # Clean slashes, quotes, and punctuation
+        kw = re.sub(r'[/\\()|]', ' ', keywords)
+        kw = re.sub(r'\s+', ' ', kw).replace('"', '').strip()
         loc = location.replace('"', '').strip() if location else ""
         remote = "remote" if remote_only else ""
 
@@ -140,9 +145,14 @@ class LinkedInFinder:
         max_results: int = DEFAULT_MAX_RESULTS
     ) -> List[Dict[str, Any]]:
         """
-        Primary search function: searches multi-tier providers, strips spam,
-        and extracts contact emails, apply links, and required skills.
+        Primary search function: checks cache first, queries multi-tier providers, 
+        strips spam, and extracts contact emails, apply links, and required skills.
         """
+        cache_key = f"{keywords}::{location}::{remote_only}::{max_results}"
+        cached = self.cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         queries = self.build_queries(keywords, location, remote_only)
         all_raw = []
 
@@ -183,5 +193,9 @@ class LinkedInFinder:
 
             if len(parsed_posts) >= max_results:
                 break
+
+        # Cache results for faster subsequent retrieval
+        if parsed_posts:
+            self.cache.set(cache_key, parsed_posts)
 
         return parsed_posts

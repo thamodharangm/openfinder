@@ -4,22 +4,23 @@ from typing import Dict, List, Any, Optional
 import pypdf
 import sys
 
-# Add parent dir to path
+# Ensure root in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from config import COMMON_SKILLS
+from config import SKILL_TAXONOMY, COMMON_SKILLS
 
 
 class ResumeParser:
     """
-    Parses PDF resumes, extracts text, identifies key technical skills, 
-    estimates experience level, and infers target job search roles.
+    Advanced Professional-Grade Resume Parser.
+    Extracts categorized technical skills, seniority level, contact info, 
+    key project indicators, and target job profiles.
     """
 
-    def __init__(self, skills_taxonomy: Optional[List[str]] = None):
-        self.skills_taxonomy = skills_taxonomy or COMMON_SKILLS
+    def __init__(self):
+        self.taxonomy = SKILL_TAXONOMY
 
     def extract_text_from_pdf(self, pdf_path: str) -> str:
-        """Extracts all clean text from a given PDF file."""
+        """Extracts text from PDF resume with multi-page handling."""
         file_path = Path(pdf_path)
         if not file_path.exists():
             raise FileNotFoundError(f"Resume file not found at: {pdf_path}")
@@ -36,89 +37,139 @@ class ResumeParser:
 
         full_text = "\n".join(extracted_text)
         if not full_text.strip():
-            raise ValueError("The provided PDF appears to be empty or scanned images without readable text.")
+            raise ValueError("The PDF contains no readable text (it may be a scanned image).")
 
         return full_text
 
-    def extract_skills(self, text: str) -> List[str]:
-        """Extracts matched skills from taxonomy."""
+    def extract_categorized_skills(self, text: str) -> Dict[str, List[str]]:
+        """Categorizes all matched technical skills into domains."""
         text_lower = text.lower()
-        matched_skills = set()
+        categorized = {}
 
-        for skill in self.skills_taxonomy:
-            # Word boundary check or exact matching
-            pattern = r'(?:\b|\W)' + re.escape(skill) + r'(?:\b|\W)'
-            if re.search(pattern, text_lower):
-                matched_skills.add(skill.title())
+        for category, skills in self.taxonomy.items():
+            matched = set()
+            for skill in skills:
+                pattern = r'(?:\b|\W)' + re.escape(skill) + r'(?:\b|\W)'
+                if re.search(pattern, text_lower):
+                    matched.add(skill.title())
+            if matched:
+                categorized[category] = sorted(list(matched))
 
-        return sorted(list(matched_skills))
+        return categorized
 
-    def estimate_experience_years(self, text: str) -> Optional[int]:
-        """Estimates total years of experience using regex patterns."""
+    def extract_candidate_name_and_contact(self, text: str) -> Dict[str, Optional[str]]:
+        """Extracts email, phone, and candidate name if present."""
+        email_pattern = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
+        phone_pattern = r'(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}'
+        github_pattern = r'github\.com/([a-zA-Z0-9_-]+)'
+        linkedin_pattern = r'linkedin\.com/in/([a-zA-Z0-9_-]+)'
+
+        emails = re.findall(email_pattern, text)
+        phones = re.findall(phone_pattern, text)
+        github = re.search(github_pattern, text, re.IGNORECASE)
+        linkedin = re.search(linkedin_pattern, text, re.IGNORECASE)
+
+        # First non-empty line is often the candidate's name
+        lines = [l.strip() for l in text.splitlines() if l.strip()]
+        candidate_name = lines[0] if lines and len(lines[0]) < 40 and not re.search(r'[@/:]', lines[0]) else "Candidate"
+
+        return {
+            "name": candidate_name,
+            "email": emails[0] if emails else None,
+            "phone": phones[0] if phones else None,
+            "github": f"https://github.com/{github.group(1)}" if github else None,
+            "linkedin": f"https://linkedin.com/in/{linkedin.group(1)}" if linkedin else None
+        }
+
+    def estimate_experience_and_seniority(self, text: str) -> Dict[str, Any]:
+        """Calculates years of experience and assigns a seniority band."""
         patterns = [
             r'(\d+)\+?\s*(?:years?|yrs?)\s*(?:of)?\s*experience',
             r'experience\s*:\s*(\d+)\+?\s*(?:years?|yrs?)',
-            r'(\d+)\s*(?:years?|yrs?)\s*in\s*software'
+            r'(\d+)\+?\s*(?:years?|yrs?)\s*in\s*software'
         ]
         text_lower = text.lower()
+        exp_years = None
         for pat in patterns:
             match = re.search(pat, text_lower)
             if match:
                 try:
-                    return int(match.group(1))
+                    exp_years = int(match.group(1))
+                    break
                 except ValueError:
                     pass
-        return None
 
-    def infer_target_roles(self, text: str, matched_skills: List[str]) -> List[str]:
-        """Infers suitable job titles based on resume keywords & skills."""
+        if exp_years is None:
+            # Fallback estimation based on graduation year or keyword density
+            if "intern" in text_lower or "fresher" in text_lower or "entry level" in text_lower:
+                exp_years = 1
+                seniority = "Junior / Entry-Level (0-2 Years)"
+            elif "lead" in text_lower or "architect" in text_lower or "principal" in text_lower:
+                exp_years = 6
+                seniority = "Senior / Lead (5+ Years)"
+            else:
+                exp_years = 2
+                seniority = "Mid-Level (2-4 Years)"
+        else:
+            if exp_years < 2:
+                seniority = f"Junior / Associate ({exp_years}+ Years)"
+            elif exp_years <= 4:
+                seniority = f"Mid-Level ({exp_years}+ Years)"
+            elif exp_years <= 7:
+                seniority = f"Senior Engineer ({exp_years}+ Years)"
+            else:
+                seniority = f"Staff / Principal / Lead ({exp_years}+ Years)"
+
+        return {
+            "years": exp_years,
+            "seniority_level": seniority
+        }
+
+    def infer_target_roles(self, text: str, categorized_skills: Dict[str, List[str]]) -> List[str]:
+        """Infers recommended target job roles based on skills & keywords."""
         text_lower = text.lower()
         roles = set()
 
-        role_keywords = {
-            "Full Stack Developer": ["full stack", "fullstack", "mern", "mean"],
-            "Frontend Developer": ["frontend", "front-end", "react", "vue", "angular", "next.js", "tailwind"],
-            "Backend Developer": ["backend", "back-end", "node.js", "django", "fastapi", "spring boot", "golang"],
-            "Python Developer": ["python developer", "python engineer", "django", "fastapi"],
-            "DevOps Engineer": ["devops", "kubernetes", "docker", "terraform", "ci/cd", "aws", "gcp"],
-            "Mobile App Developer": ["react native", "flutter", "ios", "android", "swift", "kotlin"],
-            "Data Scientist / AI Engineer": ["machine learning", "deep learning", "nlp", "llm", "data scientist", "pytorch"],
-            "QA / Test Automation Engineer": ["qa engineer", "selenium", "cypress", "automation tester", "playwright"]
-        }
+        all_skills_lower = {s.lower() for cat in categorized_skills.values() for s in cat}
 
-        for role_name, kws in role_keywords.items():
-            for kw in kws:
-                if kw in text_lower:
-                    roles.add(role_name)
-                    break
+        if {"react", "react.js", "next.js"}.intersection(all_skills_lower) and {"node.js", "nodejs", "express"}.intersection(all_skills_lower):
+            roles.add("Full Stack MERN / React Developer")
+        elif {"react", "react.js", "vue", "angular"}.intersection(all_skills_lower):
+            roles.add("Frontend Engineer (React / UI)")
+        elif {"node.js", "django", "fastapi", "spring boot", "golang"}.intersection(all_skills_lower):
+            roles.add("Backend Engineer")
+        elif {"python"}.intersection(all_skills_lower) and {"machine learning", "pytorch", "tensorflow", "llm"}.intersection(all_skills_lower):
+            roles.add("AI / ML Engineer")
+        elif {"docker", "kubernetes", "aws", "terraform"}.intersection(all_skills_lower):
+            roles.add("DevOps / Cloud Engineer")
+        elif {"flutter", "react native", "ios", "android"}.intersection(all_skills_lower):
+            roles.add("Mobile App Developer")
 
         if not roles:
-            # Fallback if no specific role title is matched
-            if "React" in matched_skills or "Javascript" in matched_skills:
-                roles.add("Frontend / Fullstack Developer")
-            elif "Python" in matched_skills:
-                roles.add("Python Developer")
-            else:
-                roles.add("Software Engineer")
+            roles.add("Software Engineer")
 
         return list(roles)
 
     def parse(self, pdf_path: str) -> Dict[str, Any]:
         """
-        Main entrypoint: parses PDF, extracts text, skills, estimated experience,
-        and target roles.
+        Main parser entrypoint.
         """
         text = self.extract_text_from_pdf(pdf_path)
-        skills = self.extract_skills(text)
-        exp_years = self.estimate_experience_years(text)
-        target_roles = self.infer_target_roles(text, skills)
+        categorized_skills = self.extract_categorized_skills(text)
+        flat_skills = [s for cat in categorized_skills.values() for s in cat]
+        contact_info = self.extract_candidate_name_and_contact(text)
+        exp_data = self.estimate_experience_and_seniority(text)
+        target_roles = self.infer_target_roles(text, categorized_skills)
 
         return {
-            "file_path": str(Path(pdf_path).resolve()),
-            "total_character_count": len(text),
-            "estimated_experience_years": exp_years or "Not explicitly specified (Estimated Entry/Mid)",
-            "matched_skills": skills,
-            "top_skills": skills[:10],
-            "inferred_target_roles": target_roles,
-            "raw_text_snippet": text[:500] + "..." if len(text) > 500 else text
+            "candidate_name": contact_info["name"],
+            "contact_info": contact_info,
+            "years_of_experience": exp_data["years"],
+            "seniority_level": exp_data["seniority_level"],
+            "target_roles": target_roles,
+            "primary_role": target_roles[0] if target_roles else "Software Engineer",
+            "skills_categorized": categorized_skills,
+            "top_skills": flat_skills[:12],
+            "total_skills_count": len(flat_skills),
+            "raw_text_length": len(text)
         }

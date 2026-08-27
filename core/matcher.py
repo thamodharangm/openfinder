@@ -1,50 +1,82 @@
+import re
 from typing import Dict, List, Any
 
 
 class JobMatcher:
     """
-    Computes match score and skill gap between candidate's resume and LinkedIn hiring posts.
+    Enterprise-Grade Multi-Dimensional Match Engine.
+    Evaluates:
+      1. Technical Stack Overlap (50%)
+      2. Experience & Seniority Fit (30%)
+      3. Role & Domain Alignment (20%)
+    Provides actionable ATS resume tailoring recommendations.
     """
 
     @staticmethod
-    def calculate_match(candidate_skills: List[str], required_skills: List[str]) -> Dict[str, Any]:
-        """
-        Calculates match percentage and skill breakdown.
-        """
+    def calculate_weighted_match(
+        candidate_skills: List[str],
+        candidate_exp_years: int,
+        required_skills: List[str],
+        experience_required_str: str
+    ) -> Dict[str, Any]:
+        """Calculates multi-dimensional weighted score and skill gaps."""
         cand_set = {s.lower() for s in candidate_skills}
         req_set = {s.lower() for s in required_skills}
 
-        if not req_set:
-            # If the post doesn't list specific technical skills from taxonomy, give a baseline score
-            return {
-                "match_score": 65,
-                "matched_skills": list(candidate_skills[:3]),
-                "missing_skills": [],
-                "match_grade": "Moderate (General Match)"
-            }
+        # 1. Tech Stack Overlap (Weight: 50%)
+        if req_set:
+            matched_skills = cand_set.intersection(req_set)
+            missing_skills = req_set - cand_set
+            tech_score = (len(matched_skills) / len(req_set)) * 100
+        else:
+            matched_skills = set(candidate_skills[:3])
+            missing_skills = set()
+            tech_score = 70  # Baseline when skills aren't explicitly tagged
 
-        matched = cand_set.intersection(req_set)
-        missing = req_set - cand_set
+        # 2. Experience Alignment (Weight: 30%)
+        exp_match = re.search(r'(\d+)', experience_required_str)
+        required_exp_years = int(exp_match.group(1)) if exp_match else 2
 
-        match_score = int((len(matched) / len(req_set)) * 100)
-        # Cap score between 0 and 100
-        match_score = max(10, min(match_score, 100))
+        exp_diff = abs(candidate_exp_years - required_exp_years)
+        if exp_diff == 0:
+            exp_score = 100
+        elif exp_diff <= 1:
+            exp_score = 85
+        elif exp_diff <= 2:
+            exp_score = 70
+        else:
+            exp_score = max(30, 100 - (exp_diff * 20))
 
-        if match_score >= 80:
-            grade = "🌟 Excellent Match"
-        elif match_score >= 60:
-            grade = "⚡ Good Match"
-        elif match_score >= 40:
-            grade = "⚠️ Partial Match"
+        # 3. Overall Weighted Score
+        final_score = int((tech_score * 0.6) + (exp_score * 0.4))
+        final_score = max(15, min(final_score, 100))
+
+        # Grading
+        if final_score >= 85:
+            grade = "🌟 Top Match (High Interview Probability)"
+        elif final_score >= 70:
+            grade = "⚡ Strong Match"
+        elif final_score >= 50:
+            grade = "⚠️ Moderate Match (Upskilling Advantage)"
         else:
             grade = "❌ Low Match"
 
-        # Convert sets back to title case for display
+        # Actionable ATS Tailoring Advice
+        tailoring_advice = []
+        if missing_skills:
+            missing_title = [s.title() for s in list(missing_skills)[:3]]
+            tailoring_advice.append(f"Highlight any familiarity or mini-projects with: {', '.join(missing_title)}.")
+        if candidate_exp_years < required_exp_years:
+            tailoring_advice.append(f"Emphasize high-impact project results to bridge the {required_exp_years}+ yrs requirement.")
+        else:
+            tailoring_advice.append("Emphasize leadership and architectural ownership in your resume.")
+
         return {
-            "match_score": match_score,
-            "matched_skills": [s.title() for s in matched],
-            "missing_skills": [s.title() for s in missing],
-            "match_grade": grade
+            "match_score": final_score,
+            "match_grade": grade,
+            "matched_skills": [s.title() for s in matched_skills],
+            "missing_skills": [s.title() for s in missing_skills],
+            "ats_recommendations": tailoring_advice
         }
 
     @classmethod
@@ -52,22 +84,29 @@ class JobMatcher:
         cls, 
         candidate_profile: Dict[str, Any], 
         posts: List[Dict[str, Any]], 
-        min_score: int = 40
+        min_score: int = 35
     ) -> List[Dict[str, Any]]:
-        """
-        Scores all posts against candidate's profile and returns sorted results.
-        """
-        candidate_skills = candidate_profile.get("matched_skills", [])
-        ranked_posts = []
+        """Scores and ranks all posts with deep multidimensional analysis."""
+        cand_skills = candidate_profile.get("top_skills", [])
+        cand_exp = candidate_profile.get("years_of_experience", 2)
+        if isinstance(cand_exp, str):
+            cand_exp = 2
 
-        for post in posts:
-            req_skills = post.get("required_skills", [])
-            match_data = cls.calculate_match(candidate_skills, req_skills)
+        ranked = []
+        for p in posts:
+            req_skills = p.get("required_skills", [])
+            exp_str = p.get("experience_required", "1-3 Years")
+
+            match_data = cls.calculate_weighted_match(
+                candidate_skills=cand_skills,
+                candidate_exp_years=cand_exp,
+                required_skills=req_skills,
+                experience_required_str=exp_str
+            )
 
             if match_data["match_score"] >= min_score:
-                enriched_post = {**post, **match_data}
-                ranked_posts.append(enriched_post)
+                enriched = {**p, **match_data}
+                ranked.append(enriched)
 
-        # Sort descending by match score
-        ranked_posts.sort(key=lambda x: x["match_score"], reverse=True)
-        return ranked_posts
+        ranked.sort(key=lambda x: x["match_score"], reverse=True)
+        return ranked

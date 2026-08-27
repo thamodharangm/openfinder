@@ -4,81 +4,110 @@ from typing import Dict, List, Any, Optional
 
 class PostParser:
     """
-    Parses raw text from LinkedIn posts to extract emails, application links, 
-    recruiter contact methods, skills mentioned, and role titles.
+    Advanced Post Parser extracting Company, Work Mode, Compensation, 
+    Recruiter Profiles, Experience Range, and Application Links.
     """
 
     EMAIL_REGEX = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
     URL_REGEX = r'https?://[^\s<>"]+|www\.[^\s<>"]+'
 
     @staticmethod
-    def extract_emails(text: str) -> List[str]:
-        """Extracts valid email addresses from text."""
-        emails = re.findall(PostParser.EMAIL_REGEX, text)
-        # Filter out common false positives like image extensions or generic domains if any
-        valid = [e for e in set(emails) if not e.endswith(('.png', '.jpg', '.jpeg', '.gif'))]
-        return valid
-
-    @staticmethod
-    def extract_links(text: str) -> List[str]:
-        """Extracts application links, google forms, career portal links."""
-        urls = re.findall(PostParser.URL_REGEX, text)
-        apply_links = []
-        for url in urls:
-            # Clean trailing punctuation
-            url = url.rstrip('.,;:)')
-            if any(domain in url for domain in ['forms.gle', 'docs.google.com/forms', 'linkedin.com', 'notion.site', 'lever.co', 'greenhouse.io', 'workable.com']):
-                apply_links.append(url)
-            elif "apply" in url or "career" in url or "jobs" in url:
-                apply_links.append(url)
-        return list(set(apply_links))
-
-    @staticmethod
-    def extract_skills_mentioned(text: str, skills_taxonomy: List[str]) -> List[str]:
-        """Finds which known technical skills are required in the post."""
+    def extract_work_mode(text: str) -> str:
+        """Determines Remote, Hybrid, or On-Site mode."""
         text_lower = text.lower()
-        skills = set()
-        for skill in skills_taxonomy:
-            pattern = r'(?:\b|\W)' + re.escape(skill) + r'(?:\b|\W)'
-            if re.search(pattern, text_lower):
-                skills.add(skill.title())
-        return sorted(list(skills))
+        if "remote" in text_lower or "wfh" in text_lower or "work from home" in text_lower:
+            return "🏡 Remote / WFH"
+        elif "hybrid" in text_lower:
+            return "🏢 Hybrid"
+        elif "on-site" in text_lower or "onsite" in text_lower or "office" in text_lower:
+            return "📍 On-Site"
+        return "📍 On-Site / Unspecified"
 
     @staticmethod
-    def extract_experience_required(text: str) -> Optional[str]:
-        """Finds experience requirements in the post (e.g. 2-4 years, 0-1 years)."""
+    def extract_salary_or_ctc(text: str) -> Optional[str]:
+        """Detects salary / CTC ranges (e.g. 10-15 LPA, $80k-$120k)."""
         patterns = [
-            r'(\d+\s*(?:to|-)\s*\d+\+?\s*(?:years?|yrs?))',
-            r'(\d+\+?\s*(?:years?|yrs?)\s*(?:of)?\s*(?:exp|experience)?)',
-            r'freshers?\s*(?:welcome|can apply)?',
-            r'internship'
+            r'(\d+\s*(?:to|-)\s*\d+\s*(?:lpa|lakhs?|lac|k|inr))',
+            r'(?:ctc|salary|package)\s*:\s*([^\n,]+)',
+            r'(\$\d+k?\s*(?:to|-)\s*\$?\d+k?)'
         ]
         text_lower = text.lower()
         for pat in patterns:
             match = re.search(pat, text_lower)
             if match:
-                return match.group(0).strip()
-        return "Not explicitly specified"
+                return match.group(0).strip().title()
+        return None
+
+    @staticmethod
+    def extract_company_name(title: str, text: str) -> str:
+        """Extracts company name from title or snippet."""
+        # Check patterns like 'React Developer at Google' or 'Modefin is hiring'
+        patterns = [
+            r'(?:at|@)\s+([A-Z][a-zA-Z0-9&]+)',
+            r'([A-Z][a-zA-Z0-9&]+)\s+(?:is hiring|hiring for)',
+            r'Company\s*:\s*([A-Za-z0-9& ]+)'
+        ]
+        combined = title + " " + text
+        for pat in patterns:
+            match = re.search(pat, combined)
+            if match:
+                comp = match.group(1).strip()
+                if comp.lower() not in ["we", "hiring", "immediate", "looking", "urgent"]:
+                    return comp
+        
+        # Fallback to cleaning from title
+        clean_title = re.sub(r'#\w+', '', title)
+        parts = clean_title.split('—')
+        if len(parts) > 1:
+            return parts[0].strip()
+        parts = clean_title.split('-')
+        if len(parts) > 1 and len(parts[0].strip()) < 30:
+            return parts[0].strip()
+
+        return "Hiring Company"
 
     @classmethod
     def parse(cls, post_data: Dict[str, Any], skills_taxonomy: List[str]) -> Dict[str, Any]:
-        """
-        Enriches a raw post dictionary with parsed metadata.
-        """
+        """Enriches raw post dictionary with structured metadata."""
         content = post_data.get("snippet", "") + "\n" + post_data.get("title", "")
-        emails = cls.extract_emails(content)
-        apply_links = cls.extract_links(content)
-        skills = cls.extract_skills_mentioned(content, skills_taxonomy)
-        exp = cls.extract_experience_required(content)
+        title = post_data.get("title", "LinkedIn Hiring Opportunity")
+        
+        emails = re.findall(cls.EMAIL_REGEX, content)
+        valid_emails = [e for e in set(emails) if not e.endswith(('.png', '.jpg', '.jpeg', '.gif'))]
+
+        urls = re.findall(cls.URL_REGEX, content)
+        apply_links = [u.rstrip('.,;:)') for u in urls if any(d in u for d in ['forms.gle', 'docs.google.com', 'lever.co', 'greenhouse.io', 'workable.com'])]
+
+        # Matched skills
+        text_lower = content.lower()
+        skills = {s.title() for s in skills_taxonomy if re.search(r'(?:\b|\W)' + re.escape(s) + r'(?:\b|\W)', text_lower)}
+
+        # Experience
+        exp_patterns = [
+            r'(\d+\s*(?:to|-)\s*\d+\+?\s*(?:years?|yrs?))',
+            r'(\d+\+?\s*(?:years?|yrs?)\s*(?:of)?\s*(?:exp|experience)?)',
+            r'freshers?\s*(?:welcome|can apply)?'
+        ]
+        exp_req = "1-3 Years (Estimated)"
+        for pat in exp_patterns:
+            match = re.search(pat, text_lower)
+            if match:
+                exp_req = match.group(0).strip()
+                break
+
+        company = cls.extract_company_name(title, content)
+        work_mode = cls.extract_work_mode(content)
+        salary = cls.extract_salary_or_ctc(content)
 
         return {
-            "title": post_data.get("title", "LinkedIn Hiring Post"),
-            "post_url": post_data.get("link", ""),
-            "author": post_data.get("author", "LinkedIn User"),
-            "published_time": post_data.get("published_time", "Recent"),
-            "contact_emails": emails,
+            "title": title,
+            "company": company,
+            "work_mode": work_mode,
+            "salary_range": salary or "Competitive / Not Disclosed",
+            "experience_required": exp_req,
+            "required_skills": sorted(list(skills)),
+            "contact_emails": valid_emails,
             "application_links": apply_links,
-            "required_skills": skills,
-            "experience_required": exp,
+            "post_url": post_data.get("link", ""),
             "raw_snippet": content.strip()
         }

@@ -12,10 +12,10 @@ from mcp.server.fastmcp import FastMCP
 from core.resume_parser import ResumeParser
 from core.linkedin_finder import LinkedInFinder
 from core.matcher import JobMatcher
-from core.post_parser import PostParser
+from core.pitch_generator import OutreachPitchGenerator
 
 # Initialize FastMCP Server
-mcp = FastMCP("LinkedIn Job Scout & Resume Matcher")
+mcp = FastMCP("OpenFinder - Professional Career Scout")
 
 # Initialize core services
 resume_parser = ResumeParser()
@@ -25,8 +25,8 @@ linkedin_finder = LinkedInFinder()
 @mcp.tool()
 def parse_resume(pdf_path: str) -> Dict[str, Any]:
     """
-    Parses a PDF resume, extracting key technical skills, estimated years of experience, 
-    and target job search roles.
+    Deeply parses a candidate PDF resume, extracting categorized technical skills
+    (Frontend, Backend, Cloud, AI/ML), estimated seniority level, contact info, and target roles.
     
     Args:
         pdf_path: Absolute or relative path to the candidate's resume PDF file.
@@ -43,40 +43,33 @@ def search_jobs_by_resume(
     location: str = "India",
     timeframe: str = "w",
     remote_only: bool = False,
-    min_match_score: int = 40
+    min_match_score: int = 35
 ) -> Dict[str, Any]:
     """
-    Parses your Resume PDF, identifies your top skills and target roles, 
-    searches recent genuine LinkedIn hiring posts, and ranks them by Match Score %.
+    Deeply parses Resume PDF, queries real-time LinkedIn hiring posts, 
+    calculates multi-dimensional weighted match scores, and provides ATS optimization advice.
     
     Args:
-        resume_path: Path to your resume PDF (e.g. 'D:/resume.pdf' or 'sample_resume/resume.pdf').
-        location: City or Country to search in (e.g. 'Bangalore', 'Chennai', 'India', 'USA').
-        timeframe: 'd' (past 24 hours), 'w' (past 7 days), 'm' (past month).
+        resume_path: Path to candidate resume PDF (e.g. 'D:/my_resume.pdf').
+        location: City or Country to search in (e.g. 'Bangalore', 'Remote', 'India').
+        timeframe: 'd' (past 24h), 'w' (past 7 days), 'm' (past month).
         remote_only: True if looking only for remote positions.
-        min_match_score: Minimum match percentage threshold to include (default 40%).
+        min_match_score: Minimum match percentage threshold (default 35%).
     """
     try:
-        # 1. Parse Resume
-        candidate_profile = resume_parser.parse(resume_path)
-        top_skills = candidate_profile.get("top_skills", [])
-        inferred_roles = candidate_profile.get("inferred_target_roles", ["Software Engineer"])
+        profile = resume_parser.parse(resume_path)
+        top_skills = profile.get("top_skills", [])
+        primary_role = profile.get("primary_role", "Software Engineer")
 
-        if not top_skills:
-            return {"error": "No technical skills could be extracted from the resume to perform matching."}
-
-        # 2. Formulate query using target roles or high-priority skills
-        if inferred_roles:
-            search_kw = inferred_roles[0]
-        elif len(top_skills) >= 2:
+        # Pick high-yield search keywords (e.g. 'React Developer' or 'React Node.js')
+        if len(top_skills) >= 2:
             search_kw = f"{top_skills[0]} {top_skills[1]}"
         elif top_skills:
-            search_kw = top_skills[0]
+            search_kw = f"{top_skills[0]} Developer"
         else:
             search_kw = "Software Developer"
 
-        # 3. Search LinkedIn hiring posts
-        raw_posts = linkedin_finder.search_hiring_posts(
+        posts = linkedin_finder.search_hiring_posts(
             keywords=search_kw,
             location=location,
             timeframe=timeframe,
@@ -84,35 +77,24 @@ def search_jobs_by_resume(
             max_results=15
         )
 
-        if not raw_posts:
-            # Fallback search with the primary role title
-            search_kw = inferred_roles[0] if inferred_roles else "Software Engineer"
-            raw_posts = linkedin_finder.search_hiring_posts(
-                keywords=search_kw,
-                location=location,
-                timeframe=timeframe,
-                remote_only=remote_only,
-                max_results=15
-            )
-
-        # 4. Score and Rank Posts
         ranked_jobs = JobMatcher.rank_and_score_posts(
-            candidate_profile=candidate_profile,
-            posts=raw_posts,
+            candidate_profile=profile,
+            posts=posts,
             min_score=min_match_score
         )
 
         return {
             "status": "success",
-            "candidate_summary": {
-                "inferred_roles": inferred_roles,
-                "extracted_skills": top_skills,
-                "experience": candidate_profile.get("estimated_experience_years")
+            "candidate_profile": {
+                "name": profile.get("candidate_name"),
+                "seniority": profile.get("seniority_level"),
+                "years_experience": profile.get("years_of_experience"),
+                "target_roles": profile.get("target_roles"),
+                "skills_categorized": profile.get("skills_categorized")
             },
             "search_criteria": {
                 "keywords_used": search_kw,
                 "location": location,
-                "timeframe": timeframe,
                 "remote_only": remote_only
             },
             "total_matches_found": len(ranked_jobs),
@@ -132,14 +114,15 @@ def search_linkedin_hiring(
     max_results: int = 10
 ) -> Dict[str, Any]:
     """
-    Directly searches recent genuine LinkedIn hiring posts by keywords without requiring a resume.
+    Searches recent genuine LinkedIn hiring posts with extracted company names, 
+    work mode (Remote/Hybrid/Onsite), salary hints, and apply links.
     
     Args:
-        keywords: Role or skill keywords (e.g. 'React Developer', 'Golang Backend', 'Product Manager').
+        keywords: Job role or skills (e.g. 'React Developer', 'Python Backend').
         location: City or Country (e.g. 'Bangalore', 'Remote', 'India').
-        timeframe: 'd' (past 24h), 'w' (past week), 'm' (past month).
+        timeframe: 'd' (24h), 'w' (week), 'm' (month).
         remote_only: True to filter only remote roles.
-        max_results: Number of hiring posts to retrieve (default 10).
+        max_results: Max number of posts (default 10).
     """
     try:
         posts = linkedin_finder.search_hiring_posts(
@@ -152,7 +135,7 @@ def search_linkedin_hiring(
         return {
             "status": "success",
             "count": len(posts),
-            "search_query": keywords,
+            "query": keywords,
             "posts": posts
         }
     except Exception as e:
@@ -161,54 +144,34 @@ def search_linkedin_hiring(
 
 @mcp.tool()
 def generate_recruiter_pitch(
-    post_details: str,
-    resume_path: Optional[str] = None,
-    candidate_name: Optional[str] = "Candidate"
-) -> Dict[str, str]:
+    job_title: str,
+    company_name: str = "Hiring Team",
+    matched_skills: str = "React, Node.js",
+    candidate_name: str = "Candidate",
+    candidate_exp_years: int = 2
+) -> Dict[str, Any]:
     """
-    Drafts a personalized, high-converting Cold LinkedIn DM and Email pitch 
-    matching the candidate's resume strengths to the job post requirements.
-    
-    Args:
-        post_details: Text or URL snippet of the LinkedIn hiring post.
-        resume_path: Optional path to resume PDF to incorporate specific project highlights.
-        candidate_name: Your name to sign off with.
+    Generates 4 high-converting recruiter outreach templates:
+      1. LinkedIn Connection Note (<300 chars)
+      2. InMail / Direct Message
+      3. Formal Executive Cover Email
+      4. Day-3 Follow-Up Note
     """
-    skills_text = ""
-    if resume_path:
-        try:
-            profile = resume_parser.parse(resume_path)
-            skills_text = ", ".join(profile.get("top_skills", []))
-        except Exception:
-            pass
-
-    skills_mention = f"with strong experience in {skills_text}" if skills_text else "with relevant industry experience"
-
-    cold_dm = (
-        f"Hi [Hiring Manager / Recruiter Name],\n\n"
-        f"I came across your recent LinkedIn post regarding the hiring opening. "
-        f"I am a software professional {skills_mention}, and my background closely aligns with what your team is building.\n\n"
-        f"I've attached my resume for your review. Would you be open to a quick 5-minute chat to discuss how I can contribute to this role?\n\n"
-        f"Best regards,\n{candidate_name}"
+    skills_list = [s.strip() for s in matched_skills.split(",") if s.strip()]
+    pitches = OutreachPitchGenerator.generate_suite(
+        job_title=job_title,
+        company_name=company_name,
+        matched_skills=skills_list,
+        candidate_name=candidate_name,
+        candidate_exp_years=candidate_exp_years
     )
-
-    email_pitch = (
-        f"Subject: Application: Hiring Role - {candidate_name} ({skills_text[:30]}...)\n\n"
-        f"Dear Hiring Team,\n\n"
-        f"I noticed your job opening shared on LinkedIn and wanted to formally express my interest.\n\n"
-        f"Key highlights of what I bring:\n"
-        f"• Core Tech Stack: {skills_text or 'Relevant modern engineering practices'}\n"
-        f"• Proven track record in developing scalable and performant solutions.\n\n"
-        f"I have attached my resume and would love the opportunity to speak with you further.\n\n"
-        f"Thank you for your time,\n{candidate_name}\n[Your Phone / Portfolio Link]"
-    )
-
     return {
-        "linkedin_dm_template": cold_dm,
-        "email_pitch_template": email_pitch
+        "status": "success",
+        "job_title": job_title,
+        "company": company_name,
+        "pitches": pitches
     }
 
 
 if __name__ == "__main__":
-    # Start FastMCP server via stdio (standard for Claude Desktop / Antigravity / Cursor)
     mcp.run(transport="stdio")

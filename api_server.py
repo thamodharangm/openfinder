@@ -14,17 +14,17 @@ if str(BASE_DIR) not in sys.path:
 from core.resume_parser import ResumeParser
 from core.linkedin_finder import LinkedInFinder
 from core.matcher import JobMatcher
+from core.pitch_generator import OutreachPitchGenerator
 
 app = FastAPI(
-    title="OpenFinder - LinkedIn Job Scout & Resume Matcher API",
-    description="Universal AI Connector & Plugin for ChatGPT Actions, Claude Connectors, and Custom AI Agents.",
-    version="1.0.0",
+    title="OpenFinder - Professional LinkedIn AI Job Scout & Career Suite",
+    description="Enterprise-Grade AI Career Engine for ChatGPT Actions, Claude Connectors, and Multi-Agent Workflows.",
+    version="2.0.0",
     servers=[
-        {"url": "http://localhost:8000", "description": "Local Development Server"}
+        {"url": "http://127.0.0.1:8000", "description": "Local Development Server"}
     ]
 )
 
-# Enable CORS for cross-origin browser & AI clients
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -41,9 +41,14 @@ linkedin_finder = LinkedInFinder()
 def health_check():
     return {
         "status": "online",
-        "service": "OpenFinder LinkedIn AI Connector",
-        "chatgpt_actions_ready": True,
-        "claude_mcp_ready": True,
+        "version": "2.0.0 - Professional Suite",
+        "capabilities": [
+            "Categorized Resume Intelligence",
+            "Multi-Provider Live LinkedIn Hiring Search",
+            "Weighted Multi-Dimensional Job Matching",
+            "Multi-Format Recruiter Outreach Suite",
+            "Sub-Second SQLite Caching"
+        ],
         "docs_url": "/docs",
         "openapi_url": "/openapi.json"
     }
@@ -52,7 +57,8 @@ def health_check():
 @app.post("/api/parse-resume", tags=["Resume"])
 async def parse_resume_endpoint(file: UploadFile = File(...)) -> Dict[str, Any]:
     """
-    Upload a candidate Resume PDF and extract skills, experience, and target roles.
+    Parses candidate Resume PDF, extracts categorized technical skills,
+    estimated seniority level, contact information, and target job titles.
     """
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         shutil.copyfileobj(file.file, tmp)
@@ -73,11 +79,11 @@ async def search_jobs_by_resume_endpoint(
     location: str = Form("India"),
     timeframe: str = Form("w"),
     remote_only: bool = Form(False),
-    min_match_score: int = Form(40)
+    min_match_score: int = Form(35)
 ) -> Dict[str, Any]:
     """
-    Upload Resume PDF, automatically search matching LinkedIn hiring posts, 
-    and rank them by Match Score %.
+    Upload Resume PDF -> Extracts Categorized Skills -> Searches Live LinkedIn Posts 
+    -> Calculates Multi-Dimensional Weighted Match Scores -> Provides ATS Tailoring Advice.
     """
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         shutil.copyfileobj(file.file, tmp)
@@ -86,11 +92,15 @@ async def search_jobs_by_resume_endpoint(
     try:
         profile = resume_parser.parse(tmp_path)
         top_skills = profile.get("top_skills", [])
-        inferred_roles = profile.get("inferred_target_roles", ["Software Engineer"])
+        primary_role = profile.get("primary_role", "Software Engineer")
 
-        search_kw = inferred_roles[0] if inferred_roles else "Software Engineer"
+        # Smart high-yield query selection
         if len(top_skills) >= 2:
             search_kw = f"{top_skills[0]} {top_skills[1]}"
+        elif top_skills:
+            search_kw = f"{top_skills[0]} Developer"
+        else:
+            search_kw = "Software Developer"
 
         posts = linkedin_finder.search_hiring_posts(
             keywords=search_kw,
@@ -109,9 +119,11 @@ async def search_jobs_by_resume_endpoint(
         return {
             "status": "success",
             "candidate_profile": {
-                "roles": inferred_roles,
-                "skills": top_skills,
-                "experience": profile.get("estimated_experience_years")
+                "name": profile.get("candidate_name"),
+                "seniority": profile.get("seniority_level"),
+                "years_experience": profile.get("years_of_experience"),
+                "target_roles": profile.get("target_roles"),
+                "skills_categorized": profile.get("skills_categorized")
             },
             "total_matches": len(ranked_jobs),
             "jobs": ranked_jobs
@@ -124,14 +136,15 @@ async def search_jobs_by_resume_endpoint(
 
 @app.get("/api/search-hiring-posts", tags=["Jobs"])
 def search_hiring_posts_endpoint(
-    keywords: str = Query(..., description="Role or skill keywords (e.g. 'React Developer', 'Python')"),
-    location: str = Query("India", description="City or Country (e.g. 'Bangalore', 'Remote', 'India')"),
+    keywords: str = Query(..., description="Role or technical skill (e.g. 'React Developer', 'Python Backend')"),
+    location: str = Query("India", description="Location (e.g. 'Bangalore', 'Remote', 'India')"),
     timeframe: str = Query("w", description="'d' (24h), 'w' (7 days), 'm' (month)"),
-    remote_only: bool = Query(False, description="Filter only remote jobs"),
+    remote_only: bool = Query(False, description="Filter only remote positions"),
     max_results: int = Query(10, description="Max results to fetch")
 ) -> Dict[str, Any]:
     """
-    Direct LinkedIn hiring search endpoint (Ideal for ChatGPT Custom Actions).
+    Searches real-time LinkedIn hiring posts with company name, work mode, 
+    experience needed, salary hint, and apply links.
     """
     try:
         posts = linkedin_finder.search_hiring_posts(
@@ -153,42 +166,36 @@ def search_hiring_posts_endpoint(
 
 @app.post("/api/generate-pitch", tags=["Outreach"])
 def generate_pitch_endpoint(
-    post_snippet: str = Form(..., description="LinkedIn post text or description"),
-    candidate_skills: Optional[str] = Form(None, description="Comma-separated candidate skills"),
-    candidate_name: str = Form("Candidate", description="Your name")
+    job_title: str = Form(..., description="Job role title (e.g. 'React Developer')"),
+    company_name: str = Form("Hiring Team", description="Target company name"),
+    matched_skills: str = Form("React, Node.js", description="Comma-separated matched skills"),
+    candidate_name: str = Form("Candidate", description="Your name for sign-off"),
+    candidate_exp_years: int = Form(2, description="Years of candidate experience")
 ) -> Dict[str, Any]:
     """
-    Generate Cold LinkedIn DM and Email pitch tailored to the job opening.
+    Generates 4 personalized, high-converting outreach formats:
+      1. LinkedIn Connection Note (<300 chars)
+      2. InMail / Direct Message
+      3. Formal Executive Cover Email
+      4. Day-3 Follow-Up Note
     """
-    skills_text = candidate_skills or "modern software engineering practices"
-    
-    cold_dm = (
-        f"Hi [Hiring Manager / Recruiter Name],\n\n"
-        f"I came across your recent LinkedIn hiring post. "
-        f"I have extensive hands-on experience in {skills_text}, and my background closely aligns with your requirements.\n\n"
-        f"Would you be open to a brief chat to discuss how I can add immediate value to your team?\n\n"
-        f"Best regards,\n{candidate_name}"
+    skills_list = [s.strip() for s in matched_skills.split(",") if s.strip()]
+    pitches = OutreachPitchGenerator.generate_suite(
+        job_title=job_title,
+        company_name=company_name,
+        matched_skills=skills_list,
+        candidate_name=candidate_name,
+        candidate_exp_years=candidate_exp_years
     )
-
-    email_pitch = (
-        f"Subject: Application: Hiring Role - {candidate_name} ({skills_text[:30]}...)\n\n"
-        f"Dear Hiring Team,\n\n"
-        f"I noticed your opening shared on LinkedIn and wanted to formally apply.\n\n"
-        f"Key Highlights:\n"
-        f"• Core Tech Stack: {skills_text}\n"
-        f"• Experience building scalable, production-ready solutions.\n\n"
-        f"I have attached my resume and would welcome the opportunity to discuss further.\n\n"
-        f"Best regards,\n{candidate_name}"
-    )
-
     return {
         "status": "success",
-        "linkedin_dm": cold_dm,
-        "email_pitch": email_pitch
+        "job_title": job_title,
+        "company": company_name,
+        "pitches": pitches
     }
 
 
 if __name__ == "__main__":
     import uvicorn
-    print("🚀 Starting OpenFinder Universal AI Plugin & API Connector on http://localhost:8000 ...")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    print("🚀 Starting OpenFinder v2.0 Professional Suite on http://127.0.0.1:8000 ...")
+    uvicorn.run(app, host="127.0.0.1", port=8000)
