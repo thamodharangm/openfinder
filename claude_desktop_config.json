@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "linkedin-job-scout": {
+      "command": "python",
+      "args": [
+        "d:/projects/research/linkedin-job-scout-mcp/server.py"
+      ],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  }
+}
