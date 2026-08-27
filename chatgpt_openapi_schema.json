@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "https://YOUR_SERVER_OR_NGROK_URL"
+      "url": "https://openfinder.onrender.com"
     }
   ],
   "paths": {
