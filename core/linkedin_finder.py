@@ -28,29 +28,37 @@ class LinkedInFinder:
     def __init__(self, skills_taxonomy: Optional[List[str]] = None):
         self.skills_taxonomy = skills_taxonomy or COMMON_SKILLS
 
-    def build_query(self, keywords: str, location: str = DEFAULT_LOCATION, remote_only: bool = False) -> str:
+    def build_query_variations(self, keywords: str, location: str = DEFAULT_LOCATION, remote_only: bool = False) -> List[str]:
         """
-        Builds a precision Google/DDG dorking query for LinkedIn posts.
+        Builds progressive query variations from strict to broad to maximize search yields.
         """
-        # Flexible LinkedIn post search query
-        base = 'site:linkedin.com/posts/ ("hiring" OR "job opening" OR "immediate joiner" OR "we are hiring")'
-        
-        kw_clean = keywords.replace('"', '')
-        loc_part = f'{location}' if location else ""
-        remote_part = 'remote' if remote_only else ""
+        kw_clean = keywords.replace('"', '').strip()
+        loc_clean = location.replace('"', '').strip() if location else ""
+        remote_str = "remote" if remote_only else ""
 
-        parts = [base, kw_clean]
-        if loc_part:
-            parts.append(loc_part)
-        if remote_part:
-            parts.append(remote_part)
+        # Strategy 1: Direct LinkedIn Posts & Updates
+        q1 = f'site:linkedin.com/posts/ OR site:linkedin.com/feed/ ("hiring" OR "we are hiring" OR "job opening") "{kw_clean}"'
+        if loc_clean:
+            q1 += f' "{loc_clean}"'
+        if remote_str:
+            q1 += f' {remote_str}'
 
-        return " ".join(parts)
+        # Strategy 2: Broad LinkedIn domain query
+        q2 = f'site:linkedin.com ("hiring" OR "job opening") "{kw_clean}"'
+        if loc_clean:
+            q2 += f' "{loc_clean}"'
+        if remote_str:
+            q2 += f' {remote_str}'
 
-    def search_duckduckgo(self, query: str, max_results: int = DEFAULT_MAX_RESULTS, timeframe: str = DEFAULT_TIMEFRAME) -> List[Dict[str, Any]]:
+        # Strategy 3: General search query targeting LinkedIn hiring discussions
+        q3 = f'linkedin hiring {kw_clean} {loc_clean} {remote_str}'.strip()
+
+        return [q1, q2, q3]
+
+    def search_duckduckgo(self, query: str, max_results: int = DEFAULT_MAX_RESULTS, timeframe: Optional[str] = DEFAULT_TIMEFRAME) -> List[Dict[str, Any]]:
         """
         Executes DuckDuckGo search using ddgs library.
-        timeframe: 'd' (day), 'w' (week), 'm' (month)
+        timeframe: 'd' (day), 'w' (week), 'm' (month), or None
         """
         results = []
         if not HAS_DDGS:
@@ -58,16 +66,14 @@ class LinkedInFinder:
 
         try:
             with DDGS() as ddgs:
-                # time options: 'd', 'w', 'm', 'y'
                 ddg_results = ddgs.text(
                     query,
-                    region="in-en" if "India" in query else "wt-wt",
-                    timelimit=timeframe if timeframe in ['d', 'w', 'm'] else 'w',
-                    max_results=max_results * 2 # Fetch extra to account for spam filtering
+                    region="in-en" if "India" in query or "Bangalore" in query else "wt-wt",
+                    timelimit=timeframe if timeframe in ['d', 'w', 'm'] else None,
+                    max_results=max_results * 2
                 )
                 for item in ddg_results:
                     link = item.get("href", "")
-                    # Ensure it is a LinkedIn post or activity URL
                     if "linkedin.com" in link:
                         results.append({
                             "title": item.get("title", ""),
@@ -75,8 +81,7 @@ class LinkedInFinder:
                             "snippet": item.get("body", "")
                         })
         except Exception as e:
-            # Fallback or log
-            print(f"[LinkedInFinder] DDGS search error: {e}", file=sys.stderr)
+            print(f"[LinkedInFinder] DDGS error: {e}", file=sys.stderr)
 
         return results
 
@@ -121,32 +126,41 @@ class LinkedInFinder:
         self, 
         keywords: str, 
         location: str = DEFAULT_LOCATION, 
-        timeframe: str = DEFAULT_TIMEFRAME,
+        timeframe: Optional[str] = DEFAULT_TIMEFRAME,
         remote_only: bool = False,
         max_results: int = DEFAULT_MAX_RESULTS
     ) -> List[Dict[str, Any]]:
         """
-        Primary search function:
-        1. Formulates query
-        2. Retrieves web results
-        3. Filters spam/bait
-        4. Parses contact emails, apply links, and skills
+        Primary search function with multi-tier query fallback.
         """
-        query = self.build_query(keywords, location, remote_only)
-        
-        # 1. Fetch raw search results
-        raw_results = self.search_duckduckgo(query, max_results=max_results, timeframe=timeframe)
-        
-        # If strict timeframe returned 0, try without strict timeframe filter
-        if not raw_results and timeframe:
-            raw_results = self.search_duckduckgo(query, max_results=max_results, timeframe=None)
+        queries = self.build_query_variations(keywords, location, remote_only)
+        all_raw = []
 
-        if not raw_results:
-            raw_results = self.search_html_fallback(query, max_results=max_results)
+        for q in queries:
+            # 1. Try DuckDuckGo search
+            raw = self.search_duckduckgo(q, max_results=max_results, timeframe=timeframe)
+            if not raw and timeframe:
+                raw = self.search_duckduckgo(q, max_results=max_results, timeframe=None)
+            
+            # 2. Try HTML scraper fallback
+            if not raw:
+                raw = self.search_html_fallback(q, max_results=max_results)
 
-        # 2. Filter & Parse
+            if raw:
+                all_raw.extend(raw)
+                if len(all_raw) >= max_results:
+                    break
+
+        # Deduplicate results by URL
+        seen_urls = set()
         parsed_posts = []
-        for raw in raw_results:
+
+        for raw in all_raw:
+            url = raw.get("link", "")
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+
             full_text = f"{raw.get('title', '')} {raw.get('snippet', '')}"
             
             # Spam check
