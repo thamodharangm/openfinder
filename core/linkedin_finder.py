@@ -117,9 +117,26 @@ class LinkedInFinder:
 
         return results
 
+    @staticmethod
+    def is_valid_post_url(url: str) -> bool:
+        """
+        Ensures the URL is strictly a personal recruiter/founder LinkedIn POST or Activity update,
+        and completely filters out generic job boards (/jobs/, /directory/, /company/).
+        """
+        if not url:
+            return False
+        url_lower = url.lower()
+
+        # Explicitly ban generic job aggregator / company directories
+        if any(forbidden in url_lower for forbidden in ['/jobs/', '/job/', '/directory/', '/salary/', '/school/']):
+            return False
+
+        # Strictly require genuine post or activity paths
+        return bool('/posts/' in url_lower or '/feed/update/' in url_lower or 'activity-' in url_lower)
+
     def build_queries(self, keywords: str, location: str = DEFAULT_LOCATION, remote_only: bool = False) -> List[str]:
         """
-        Builds multiple search queries from specific post targets to broader hiring threads.
+        Builds precision queries that specifically target LinkedIn Posts, explicitly excluding /jobs/ pages.
         """
         # Clean slashes, quotes, and punctuation
         kw = re.sub(r'[/\\()|]', ' ', keywords)
@@ -127,12 +144,12 @@ class LinkedInFinder:
         loc = location.replace('"', '').strip() if location else ""
         remote = "remote" if remote_only else ""
 
-        # Query 1: Direct LinkedIn Post updates
-        q1 = f'site:linkedin.com/posts hiring "{kw}" {loc} {remote}'.strip()
-        # Query 2: Broader LinkedIn hiring searches
-        q2 = f'site:linkedin.com "we are hiring" "{kw}" {loc} {remote}'.strip()
-        # Query 3: Generic LinkedIn recruitment query
-        q3 = f'linkedin hiring {kw} {loc} {remote}'.strip()
+        # Query 1: Direct LinkedIn Post URLs only (excluding job boards)
+        q1 = f'site:linkedin.com/posts/ ("hiring" OR "we are hiring" OR "looking for") "{kw}" {loc} {remote} -inurl:jobs'.strip()
+        # Query 2: Feed update / Activity URLs
+        q2 = f'site:linkedin.com/feed/update/ ("hiring" OR "job opening") "{kw}" {loc} {remote} -inurl:jobs'.strip()
+        # Query 3: Broad post keyword match
+        q3 = f'site:linkedin.com/posts/ "{kw}" {loc} hiring -inurl:jobs'.strip()
 
         return [q1, q2, q3]
 
@@ -171,7 +188,7 @@ class LinkedInFinder:
             if len(all_raw) >= max_results:
                 break
 
-        # Deduplicate results by URL
+        # Deduplicate results by URL and strictly enforce post URLs only
         seen_urls = set()
         parsed_posts = []
 
@@ -179,6 +196,11 @@ class LinkedInFinder:
             url = raw.get("link", "")
             if not url or url in seen_urls:
                 continue
+
+            # Strict check: Must be a LinkedIn POST / Activity update (No /jobs/ links allowed)
+            if not self.is_valid_post_url(url):
+                continue
+
             seen_urls.add(url)
 
             full_text = f"{raw.get('title', '')} {raw.get('snippet', '')}"
