@@ -1,0 +1,130 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "OpenFinder - LinkedIn Job Scout & Resume Matcher API",
+    "description": "Searches real-time LinkedIn hiring posts, parses candidate resume profiles, calculates skill match scores, and generates recruiter cold outreach pitches.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://YOUR_SERVER_OR_NGROK_URL"
+    }
+  ],
+  "paths": {
+    "/api/search-hiring-posts": {
+      "get": {
+        "summary": "Search Real-Time LinkedIn Hiring Posts",
+        "description": "Searches recent hiring posts on LinkedIn by job role or technical skills, extracts recruiter emails, apply links, and filters out spam.",
+        "operationId": "searchHiringPosts",
+        "parameters": [
+          {
+            "name": "keywords",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Keywords such as 'React Developer', 'Python Backend', 'Product Manager'"
+          },
+          {
+            "name": "location",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "India"
+            },
+            "description": "Location to search (e.g. 'Bangalore', 'Remote', 'India', 'United States')"
+          },
+          {
+            "name": "timeframe",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "w"
+            },
+            "description": "Search timeframe: 'd' (past 24h), 'w' (past 7 days), 'm' (past month)"
+          },
+          {
+            "name": "remote_only",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "Filter only remote positions"
+          },
+          {
+            "name": "max_results",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 10
+            },
+            "description": "Maximum number of hiring posts to retrieve"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful retrieval of hiring posts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/generate-pitch": {
+      "post": {
+        "summary": "Generate Customized Recruiter Cold Pitch",
+        "description": "Drafts a personalized LinkedIn DM and Email application tailored to a specific hiring post.",
+        "operationId": "generatePitch",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "post_snippet": {
+                    "type": "string",
+                    "description": "Text or description of the LinkedIn post"
+                  },
+                  "candidate_skills": {
+                    "type": "string",
+                    "description": "Candidate's core skills (e.g. 'React, TypeScript, Node.js')"
+                  },
+                  "candidate_name": {
+                    "type": "string",
+                    "default": "Candidate",
+                    "description": "Your name for sign-off"
+                  }
+                },
+                "required": ["post_snippet"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Generated pitches",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
