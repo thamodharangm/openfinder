@@ -274,15 +274,63 @@ async def mcp_message_handler(request: Request):
 
     # 4. Tools List
     elif method == "tools/list":
-        print("🛠️ [Claude Connector] Claude requested tools list -> Returning 2 tools")
+        print("🛠️ [Claude Connector] Claude requested tools list -> Returning 4 tools")
         response_payload = {
             "jsonrpc": "2.0",
             "id": req_id,
             "result": {
                 "tools": [
                     {
+                        "name": "search_posts",
+                        "description": "Searches global LinkedIn posts/content by keyword (the 'Posts' tab) with recency filters (past-24h, past-week, past-month) and extracts HR contact emails, phone numbers, and tech stack.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "keywords": {
+                                    "type": "string",
+                                    "description": "Search query for LinkedIn posts (e.g. 'React Developer hiring Bangalore')"
+                                },
+                                "date_posted": {
+                                    "type": "string",
+                                    "description": "Recency filter: 'past-24h', 'past-week', or 'past-month'",
+                                    "default": "past-week"
+                                },
+                                "max_results": {
+                                    "type": "integer",
+                                    "description": "Max number of posts to fetch",
+                                    "default": 10
+                                }
+                            },
+                            "required": ["keywords"]
+                        }
+                    },
+                    {
+                        "name": "parse_linkedin_post",
+                        "description": "Extracts author, hiring company, direct HR emails, phone numbers, tech stack, and tailored recruiter pitches from any LinkedIn post URL.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "post_url": {
+                                    "type": "string",
+                                    "description": "The LinkedIn post URL (e.g. https://www.linkedin.com/posts/... or /feed/update/...)"
+                                },
+                                "candidate_name": {
+                                    "type": "string",
+                                    "description": "Candidate's full name for customized pitches",
+                                    "default": "Candidate"
+                                },
+                                "candidate_exp_years": {
+                                    "type": "integer",
+                                    "description": "Candidate's total years of experience",
+                                    "default": 0
+                                }
+                            },
+                            "required": ["post_url"]
+                        }
+                    },
+                    {
                         "name": "search_hiring_posts",
-                        "description": "Searches real-time live LinkedIn recruiter hiring posts (past 7 days only) with direct post links and requirements.",
+                        "description": "Searches real-time live LinkedIn recruiter hiring posts with direct post links and contact details.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
@@ -327,7 +375,62 @@ async def mcp_message_handler(request: Request):
         tool_name = params.get("name")
         args = params.get("arguments", {})
 
-        if tool_name == "search_hiring_posts":
+        if tool_name == "search_posts":
+            keywords = args.get("keywords", "React Developer hiring")
+            date_posted = args.get("date_posted", "past-week")
+            max_results = args.get("max_results", 10)
+
+            posts = linkedin_finder.search_posts(
+                keywords=keywords,
+                date_posted=date_posted,
+                max_results=max_results
+            )
+            response_payload = {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps({"status": "success", "count": len(posts), "posts": posts}, indent=2)
+                        }
+                    ]
+                }
+            }
+
+        elif tool_name == "parse_linkedin_post":
+            post_url = args.get("post_url")
+            c_name = args.get("candidate_name", "Candidate")
+            c_exp = args.get("candidate_exp_years", 0)
+
+            cand_profile = None
+            if c_name != "Candidate" or c_exp > 0:
+                cand_profile = {
+                    "name": c_name,
+                    "experience_years": c_exp,
+                    "skills": [],
+                    "target_roles": []
+                }
+
+            post_data = LinkedInPostExtractor.extract_from_url(
+                url=post_url,
+                candidate_profile=cand_profile
+            )
+
+            response_payload = {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps({"status": "success", "post": post_data}, indent=2)
+                        }
+                    ]
+                }
+            }
+
+        elif tool_name == "search_hiring_posts":
             keywords = args.get("keywords", "React Developer")
             location = args.get("location", "India")
             max_results = args.get("max_results", 10)
