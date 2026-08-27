@@ -1,8 +1,12 @@
-from fastapi import FastAPI, UploadFile, File, Form, Query
+from fastapi import FastAPI, UploadFile, File, Form, Query, Request
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List, Dict, Any
 import shutil
 import tempfile
+import json
+import asyncio
+import uuid
 from pathlib import Path
 import sys
 
@@ -17,14 +21,12 @@ from core.matcher import JobMatcher
 from core.pitch_generator import OutreachPitchGenerator
 
 app = FastAPI(
-    title="OpenFinder - Professional LinkedIn AI Job Scout & Career Suite",
-    description="Enterprise-Grade AI Career Engine for ChatGPT Actions, Claude Connectors, and Multi-Agent Workflows.",
-    version="2.0.0",
-    servers=[
-        {"url": "http://127.0.0.1:8000", "description": "Local Development Server"}
-    ]
+    title="OpenFinder - Universal AI Career Scout & Claude Connector",
+    description="Full Dual Protocol API supporting ChatGPT OpenAPI Actions and Claude Web Connectors (MCP SSE & JSON-RPC).",
+    version="2.0.0"
 )
 
+# Enable CORS and bypass headers
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -35,6 +37,9 @@ app.add_middleware(
 
 resume_parser = ResumeParser()
 linkedin_finder = LinkedInFinder()
+
+# Active SSE sessions
+sessions: Dict[str, asyncio.Queue] = {}
 
 
 @app.get("/", tags=["Health"])
@@ -49,38 +54,81 @@ def health_check():
     }
 
 
-# ==========================================
-# 🟢 CLAUDE WEB CUSTOM CONNECTOR (MCP PROTOCOL)
-# ==========================================
+# ==========================================================
+# 🟢 CLAUDE WEB CUSTOM CONNECTOR (SSE & JSON-RPC DUAL MCP)
+# ==========================================================
 
-from fastapi.responses import JSONResponse, Response
-
-@app.get("/.well-known/oauth-authorization-server", tags=["Claude"])
-@app.get("/.well-known/oauth-protected-resource", tags=["Claude"])
-def oauth_discovery():
-    # Returning 404 explicitly tells Claude: 'No OAuth required, connect with No-Auth'
+@app.get("/.well-known/oauth-authorization-server")
+@app.get("/.well-known/oauth-protected-resource")
+@app.get("/.well-known/oauth-protected-resource/{path:path}")
+def oauth_no_auth():
     return Response(status_code=404)
 
 
-@app.post("/register", tags=["Claude"])
+@app.post("/register")
 def dynamic_client_register():
     return Response(status_code=404)
 
 
-@app.post("/", tags=["Claude"])
-@app.post("/mcp", tags=["Claude"])
-async def mcp_jsonrpc_endpoint(request: dict):
+@app.get("/sse")
+@app.get("/mcp")
+async def mcp_sse_endpoint(request: Request):
     """
-    Handles native JSON-RPC 2.0 MCP requests sent by Claude Web Custom Connectors.
+    Standard MCP SSE Transport for Claude Web Connectors.
     """
-    req_id = request.get("id")
-    method = request.get("method")
-    params = request.get("params", {})
+    session_id = str(uuid.uuid4())
+    queue = asyncio.Queue()
+    sessions[session_id] = queue
+
+    async def event_generator():
+        # First send the endpoint event as per MCP specification
+        endpoint_url = f"/messages?session_id={session_id}"
+        yield f"event: endpoint\ndata: {endpoint_url}\n\n"
+
+        while True:
+            if await request.is_disconnected():
+                sessions.pop(session_id, None)
+                break
+            try:
+                data = await asyncio.wait_for(queue.get(), timeout=15.0)
+                yield f"event: message\ndata: {json.dumps(data)}\n\n"
+            except asyncio.TimeoutError:
+                # Keep-alive ping
+                yield ": keep-alive\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+@app.post("/messages")
+@app.post("/")
+@app.post("/mcp")
+async def mcp_message_handler(request: Request):
+    """
+    Handles JSON-RPC 2.0 messages from Claude Connectors.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return Response(status_code=400)
+
+    req_id = body.get("id")
+    method = body.get("method")
+    params = body.get("params", {})
+    client_proto = params.get("protocolVersion", "2024-11-05")
+
+    response_payload = None
 
     # 1. Initialize
     if method == "initialize":
-        client_proto = params.get("protocolVersion", "2024-11-05")
-        return {
+        response_payload = {
             "jsonrpc": "2.0",
             "id": req_id,
             "result": {
@@ -97,30 +145,30 @@ async def mcp_jsonrpc_endpoint(request: dict):
             }
         }
 
-    # 2. Initialized Notification
-    if method == "notifications/initialized":
-        return JSONResponse(content={"jsonrpc": "2.0", "result": {}})
+    # 2. Notifications
+    elif method == "notifications/initialized":
+        return Response(status_code=200)
 
     # 3. Ping
-    if method == "ping":
-        return {"jsonrpc": "2.0", "id": req_id, "result": {}}
+    elif method == "ping":
+        response_payload = {"jsonrpc": "2.0", "id": req_id, "result": {}}
 
-    # 4. List Tools
-    if method == "tools/list":
-        return {
+    # 4. Tools List
+    elif method == "tools/list":
+        response_payload = {
             "jsonrpc": "2.0",
             "id": req_id,
             "result": {
                 "tools": [
                     {
                         "name": "search_hiring_posts",
-                        "description": "Searches recent live LinkedIn recruiter hiring posts (past 7 days only, excluding generic job boards) with post links, emails, and requirements.",
+                        "description": "Searches real-time live LinkedIn recruiter hiring posts (past 7 days only) with direct post links and requirements.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
                                 "keywords": {
                                     "type": "string",
-                                    "description": "Job role or technical skill (e.g. 'React Developer', 'Python Backend')"
+                                    "description": "Job role or tech stack (e.g. 'React Developer', 'MERN Stack')"
                                 },
                                 "location": {
                                     "type": "string",
@@ -129,7 +177,7 @@ async def mcp_jsonrpc_endpoint(request: dict):
                                 },
                                 "max_results": {
                                     "type": "integer",
-                                    "description": "Max posts to fetch (default 10)",
+                                    "description": "Max results to fetch",
                                     "default": 10
                                 }
                             },
@@ -138,14 +186,14 @@ async def mcp_jsonrpc_endpoint(request: dict):
                     },
                     {
                         "name": "generate_recruiter_pitch",
-                        "description": "Generates 4 personalized, high-converting outreach message formats (LinkedIn Connection Note <300 chars, InMail, Formal Cover Email, Follow-Up).",
+                        "description": "Generates 4 personalized recruiter outreach formats (Connection Note <300 chars, InMail, Formal Cover Email, Follow-Up).",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
                                 "job_title": { "type": "string", "description": "Target job title" },
-                                "company_name": { "type": "string", "description": "Company name", "default": "Hiring Team" },
-                                "matched_skills": { "type": "string", "description": "Key skills (e.g. 'React, Node.js')", "default": "React" },
-                                "candidate_name": { "type": "string", "description": "Your name", "default": "Candidate" }
+                                "company_name": { "type": "string", "description": "Target company name", "default": "Hiring Team" },
+                                "matched_skills": { "type": "string", "description": "Key candidate skills", "default": "React" },
+                                "candidate_name": { "type": "string", "description": "Candidate name", "default": "Candidate" }
                             },
                             "required": ["job_title"]
                         }
@@ -154,8 +202,8 @@ async def mcp_jsonrpc_endpoint(request: dict):
             }
         }
 
-    # 5. Call Tool
-    if method == "tools/call":
+    # 5. Tools Call
+    elif method == "tools/call":
         tool_name = params.get("name")
         args = params.get("arguments", {})
 
@@ -170,9 +218,8 @@ async def mcp_jsonrpc_endpoint(request: dict):
                 timeframe="w",
                 max_results=max_results
             )
-            
-            import json
-            return {
+
+            response_payload = {
                 "jsonrpc": "2.0",
                 "id": req_id,
                 "result": {
@@ -185,8 +232,7 @@ async def mcp_jsonrpc_endpoint(request: dict):
                 }
             }
 
-        if tool_name == "generate_recruiter_pitch":
-            from core.pitch_generator import OutreachPitchGenerator
+        elif tool_name == "generate_recruiter_pitch":
             job_title = args.get("job_title", "Software Engineer")
             company_name = args.get("company_name", "Hiring Team")
             matched_skills = [s.strip() for s in args.get("matched_skills", "React").split(",")]
@@ -198,9 +244,8 @@ async def mcp_jsonrpc_endpoint(request: dict):
                 matched_skills=matched_skills,
                 candidate_name=candidate_name
             )
-            
-            import json
-            return {
+
+            response_payload = {
                 "jsonrpc": "2.0",
                 "id": req_id,
                 "result": {
@@ -213,15 +258,25 @@ async def mcp_jsonrpc_endpoint(request: dict):
                 }
             }
 
-    return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": f"Method '{method}' not found"}}
+    if response_payload:
+        # Check if session_id query param exists for SSE routing
+        session_id = request.query_params.get("session_id")
+        if session_id and session_id in sessions:
+            await sessions[session_id].put(response_payload)
+            return Response(status_code=202)
+        return JSONResponse(content=response_payload)
 
+    return JSONResponse(
+        content={"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": f"Method '{method}' not found"}}
+    )
+
+
+# ==========================================================
+# 🟢 CHATGPT OPENAPI REST ENDPOINTS
+# ==========================================================
 
 @app.post("/api/parse-resume", tags=["Resume"])
 async def parse_resume_endpoint(file: UploadFile = File(...)) -> Dict[str, Any]:
-    """
-    Parses candidate Resume PDF, extracts categorized technical skills,
-    estimated seniority level, contact information, and target job titles.
-    """
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         shutil.copyfileobj(file.file, tmp)
         tmp_path = tmp.name
@@ -243,10 +298,6 @@ async def search_jobs_by_resume_endpoint(
     remote_only: bool = Form(False),
     min_match_score: int = Form(35)
 ) -> Dict[str, Any]:
-    """
-    Upload Resume PDF -> Extracts Categorized Skills -> Searches Live LinkedIn Posts 
-    -> Calculates Multi-Dimensional Weighted Match Scores -> Provides ATS Tailoring Advice.
-    """
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         shutil.copyfileobj(file.file, tmp)
         tmp_path = tmp.name
@@ -256,13 +307,9 @@ async def search_jobs_by_resume_endpoint(
         top_skills = profile.get("top_skills", [])
         primary_role = profile.get("primary_role", "Software Engineer")
 
-        # Smart high-yield query selection
+        search_kw = primary_role
         if len(top_skills) >= 2:
             search_kw = f"{top_skills[0]} {top_skills[1]}"
-        elif top_skills:
-            search_kw = f"{top_skills[0]} Developer"
-        else:
-            search_kw = "Software Developer"
 
         posts = linkedin_finder.search_hiring_posts(
             keywords=search_kw,
@@ -304,10 +351,6 @@ def search_hiring_posts_endpoint(
     remote_only: bool = Query(False, description="Filter only remote positions"),
     max_results: int = Query(10, description="Max results to fetch")
 ) -> Dict[str, Any]:
-    """
-    Searches real-time LinkedIn hiring posts with company name, work mode, 
-    experience needed, salary hint, and apply links.
-    """
     try:
         posts = linkedin_finder.search_hiring_posts(
             keywords=keywords,
@@ -334,13 +377,6 @@ def generate_pitch_endpoint(
     candidate_name: str = Form("Candidate", description="Your name for sign-off"),
     candidate_exp_years: int = Form(2, description="Years of candidate experience")
 ) -> Dict[str, Any]:
-    """
-    Generates 4 personalized, high-converting outreach formats:
-      1. LinkedIn Connection Note (<300 chars)
-      2. InMail / Direct Message
-      3. Formal Executive Cover Email
-      4. Day-3 Follow-Up Note
-    """
     skills_list = [s.strip() for s in matched_skills.split(",") if s.strip()]
     pitches = OutreachPitchGenerator.generate_suite(
         job_title=job_title,
@@ -359,5 +395,5 @@ def generate_pitch_endpoint(
 
 if __name__ == "__main__":
     import uvicorn
-    print("🚀 Starting OpenFinder v2.0 Professional Suite on http://127.0.0.1:8000 ...")
+    print("🚀 Starting OpenFinder v2.0 Universal Dual Protocol Server on http://127.0.0.1:8000 ...")
     uvicorn.run(app, host="127.0.0.1", port=8000)
