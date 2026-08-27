@@ -39,15 +39,44 @@ class LinkedInFinder:
                 return decoded
         return raw_url
 
+    def is_within_past_week(self, text: str) -> bool:
+        """
+        Validates that the post is strictly from the past 7 days, 
+        rejecting any old posts from months or years ago.
+        """
+        text_lower = text.lower()
+        
+        # Explicitly reject posts with old timestamp indicators
+        old_indicators = [
+            r'(\d+)\s*(?:months?|mo|month)\s*ago',
+            r'(\d+)\s*(?:years?|yrs?|year)\s*ago',
+            r'\b202[0-4]\b',  # Historical years
+            r'(\d+)\s*(?:weeks?|w)\s*ago'
+        ]
+        for pattern in old_indicators:
+            match = re.search(pattern, text_lower)
+            if match:
+                # If weeks > 1, reject
+                if "week" in pattern or "w" in pattern:
+                    try:
+                        if int(match.group(1)) > 1:
+                            return False
+                    except Exception:
+                        return False
+                else:
+                    return False
+
+        return True
+
     def search_yahoo(self, query: str, max_results: int = DEFAULT_MAX_RESULTS) -> List[Dict[str, Any]]:
         """
-        Primary search provider: Yahoo HTML search engine.
-        Returns high-quality, real-time indexed LinkedIn hiring posts.
+        Primary search provider: Yahoo HTML search engine with strict 7-day age filter.
         """
         results = []
         try:
             url = "https://search.yahoo.com/search"
-            params = {"p": query, "n": max_results * 2}
+            # bt=1w and age=1w forces Yahoo to index only past 7 days
+            params = {"p": query, "n": max_results * 2, "age": "1w", "bt": "1w"}
             
             with httpx.Client(headers=self.headers, timeout=12.0, follow_redirects=True) as client:
                 resp = client.get(url, params=params)
@@ -68,6 +97,10 @@ class LinkedInFinder:
                         clean_link = self.clean_linkedin_url(raw_link)
                         snippet = snippet_el.get_text(strip=True) if snippet_el else ""
 
+                        # Strictly enforce past week date check
+                        if not self.is_within_past_week(f"{title} {snippet}"):
+                            continue
+
                         if "linkedin.com" in clean_link:
                             results.append({
                                 "title": title,
@@ -81,12 +114,13 @@ class LinkedInFinder:
 
     def search_bing(self, query: str, max_results: int = DEFAULT_MAX_RESULTS) -> List[Dict[str, Any]]:
         """
-        Secondary search provider: Bing HTML search engine.
+        Secondary search provider: Bing HTML search engine with strict Past-Week filter (filters=ex1:"ez2").
         """
         results = []
         try:
             url = "https://www.bing.com/search"
-            params = {"q": query, "count": max_results * 2}
+            # filters=ex1:"ez2" restricts Bing to past 7 days
+            params = {"q": query, "count": max_results * 2, "filters": 'ex1:"ez2"'}
             
             with httpx.Client(headers=self.headers, timeout=12.0, follow_redirects=True) as client:
                 resp = client.get(url, params=params)
@@ -105,6 +139,10 @@ class LinkedInFinder:
                         title = title_el.get_text(strip=True)
                         clean_link = link_el.get("href", "")
                         snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+
+                        # Strictly enforce past week date check
+                        if not self.is_within_past_week(f"{title} {snippet}"):
+                            continue
 
                         if "linkedin.com" in clean_link:
                             results.append({
