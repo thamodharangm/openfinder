@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.jpg" alt="OpenFinder Logo" width="220" style="border-radius: 20px;" />
+  <img src="assets/openfinderlogo.svg" alt="OpenFinder Logo" width="240" />
 </p>
 
 <h1 align="center">🎯 OpenFinder v2.0 - Professional AI Career Suite</h1>

@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0F081D" />
+      <stop offset="50%" stop-color="#180B2E" />
+      <stop offset="100%" stop-color="#080410" />
+    </linearGradient>
+
+    <!-- Vibrant Purple Gradients -->
+    <linearGradient id="primaryPurple" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#E9D5FF" />
+      <stop offset="30%" stop-color="#C084FC" />
+      <stop offset="70%" stop-color="#9333EA" />
+      <stop offset="100%" stop-color="#6B21A8" />
+    </linearGradient>
+
+    <linearGradient id="accentPurple" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#7E22CE" />
+      <stop offset="50%" stop-color="#A855F7" />
+      <stop offset="100%" stop-color="#F3E8FF" />
+    </linearGradient>
+
+    <linearGradient id="glowGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#C084FC" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#7E22CE" stop-opacity="0.1" />
+    </linearGradient>
+
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="50%" stop-color="#E9D5FF" />
+      <stop offset="100%" stop-color="#C084FC" />
+    </linearGradient>
+
+    <!-- Glow Filters -->
+    <filter id="purpleGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="12" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="25" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background Base -->
+  <rect width="600" height="600" rx="120" fill="url(#bgGrad)" />
+
+  <!-- Ambient Purple Core Glow -->
+  <circle cx="300" cy="250" r="160" fill="#9333EA" opacity="0.18" filter="url(#softGlow)" />
+  <circle cx="300" cy="250" r="80" fill="#C084FC" opacity="0.25" filter="url(#softGlow)" />
+
+  <!-- Outer HUD / Radar Rings -->
+  <circle cx="300" cy="250" r="150" fill="none" stroke="url(#accentPurple)" stroke-width="2.5" stroke-dasharray="8 12" opacity="0.4" />
+  <circle cx="300" cy="250" r="125" fill="none" stroke="url(#primaryPurple)" stroke-width="3" opacity="0.6" />
+  
+  <!-- Radar Crosshairs -->
+  <line x1="120" y1="250" x2="150" y2="250" stroke="#C084FC" stroke-width="3" stroke-linecap="round" opacity="0.7" />
+  <line x1="450" y1="250" x2="480" y2="250" stroke="#C084FC" stroke-width="3" stroke-linecap="round" opacity="0.7" />
+  <line x1="300" y1="70" x2="300" y2="100" stroke="#C084FC" stroke-width="3" stroke-linecap="round" opacity="0.7" />
+  <line x1="300" y1="400" x2="300" y2="430" stroke="#C084FC" stroke-width="3" stroke-linecap="round" opacity="0.7" />
+
+  <!-- Outer Orbital Arc Markers -->
+  <path d="M 200 150 A 140 140 0 0 1 400 150" fill="none" stroke="url(#primaryPurple)" stroke-width="6" stroke-linecap="round" filter="url(#purpleGlow)" />
+  <path d="M 400 350 A 140 140 0 0 1 200 350" fill="none" stroke="url(#primaryPurple)" stroke-width="6" stroke-linecap="round" filter="url(#purpleGlow)" />
+
+  <!-- Stylized Geometric 'O' Emblem -->
+  <circle cx="300" cy="250" r="85" fill="none" stroke="url(#primaryPurple)" stroke-width="12" filter="url(#purpleGlow)" />
+  <circle cx="300" cy="250" r="60" fill="none" stroke="url(#accentPurple)" stroke-width="4" stroke-dasharray="6 8" opacity="0.8" />
+
+  <!-- Dynamic Futuristic Compass / Scout Needle -->
+  <!-- Top-Right Blade -->
+  <polygon points="300,250 288,238 410,130 312,252" fill="url(#primaryPurple)" filter="url(#purpleGlow)" />
+  <polygon points="300,250 312,262 410,130 288,238" fill="url(#accentPurple)" />
+
+  <!-- Bottom-Left Blade -->
+  <polygon points="300,250 312,262 190,370 288,248" fill="url(#primaryPurple)" filter="url(#purpleGlow)" />
+  <polygon points="300,250 288,238 190,370 312,262" fill="url(#accentPurple)" />
+
+  <!-- Center Core Ring & AI Node -->
+  <circle cx="300" cy="250" r="28" fill="#180B2E" stroke="url(#primaryPurple)" stroke-width="5" filter="url(#purpleGlow)" />
+  <circle cx="300" cy="250" r="14" fill="url(#textGrad)" />
+  <circle cx="300" cy="250" r="6" fill="#FFFFFF" />
+
+  <!-- Surrounding Network AI Nodes -->
+  <g filter="url(#purpleGlow)">
+    <circle cx="215" cy="180" r="6" fill="#E9D5FF" />
+    <line x1="215" y1="180" x2="250" y2="210" stroke="#C084FC" stroke-width="2" opacity="0.6" />
+    
+    <circle cx="385" cy="320" r="6" fill="#E9D5FF" />
+    <line x1="385" y1="320" x2="350" y2="290" stroke="#C084FC" stroke-width="2" opacity="0.6" />
+
+    <circle cx="410" cy="130" r="7" fill="#FFFFFF" />
+    <circle cx="190" cy="370" r="7" fill="#FFFFFF" />
+  </g>
+
+  <!-- Typography: OpenFinder -->
+  <text x="300" y="495" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Outfit', 'Inter', sans-serif" font-size="44" font-weight="800" letter-spacing="2" text-anchor="middle" fill="url(#textGrad)" filter="url(#purpleGlow)">
+    OpenFinder
+  </text>
+
+  <!-- Subtitle: AI CAREER SCOUT -->
+  <text x="300" y="530" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', sans-serif" font-size="14" font-weight="600" letter-spacing="8" text-anchor="middle" fill="#C084FC" opacity="0.9">
+    AI CAREER SCOUT
+  </text>
+</svg>
