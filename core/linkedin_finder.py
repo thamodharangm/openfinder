@@ -10,15 +10,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import COMMON_SKILLS, DEFAULT_LOCATION, DEFAULT_TIMEFRAME, DEFAULT_MAX_RESULTS
 from core.spam_filter import is_spam_or_bait
-from core.post_parser import PostParser
 from core.cache import SearchCache
+from core.post_extractor import LinkedInPostExtractor
 
 
 class LinkedInFinder:
     """
-    High-Performance LinkedIn Job & Hiring Post Finder.
-    Combines direct live LinkedIn Guest API with multi-tier web fallback,
-    providing 100% reliable job discovery, direct application links, and skill extraction.
+    Finds real-time genuine LinkedIn recruiter & founder hiring posts (strictly /posts/ & /feed/update/).
+    Completely rejects and filters out any generic corporate job board listings (/jobs/view/).
+    Extracts author, HR contact emails, phone numbers, and required tech stack.
     """
 
     def __init__(self, skills_taxonomy: Optional[List[str]] = None):
@@ -30,9 +30,31 @@ class LinkedInFinder:
             "Accept-Language": "en-US,en;q=0.9"
         }
 
+    @staticmethod
+    def is_valid_recruiter_post_url(url: str) -> bool:
+        """
+        STRICT VALIDATION: Ensures URL is ONLY a personal recruiter/founder post or activity feed update.
+        Completely rejects any /jobs/ or /jobs/view/ links.
+        """
+        if not url:
+            return False
+        url_lower = url.lower()
+
+        # Reject non-LinkedIn
+        if "linkedin.com" not in url_lower and "lnkd.in" not in url_lower:
+            return False
+
+        # Strictly BAN any job aggregator / corporate board links
+        forbidden_patterns = ['/jobs/', '/job/', '/directory/', '/salary/', '/school/', '/learning/', '/pulse/', '/company/']
+        if any(forbidden in url_lower for forbidden in forbidden_patterns):
+            return False
+
+        # Strictly require genuine personal/company social post paths
+        return bool('/posts/' in url_lower or '/feed/update/' in url_lower or 'activity-' in url_lower or 'lnkd.in/p/' in url_lower)
+
     def clean_linkedin_url(self, raw_url: str) -> str:
         """
-        Decodes Yahoo (/RU=) and Bing (&u=a1...) redirect wrappers into direct LinkedIn URLs.
+        Decodes redirect wrappers into clean LinkedIn post URLs.
         """
         if not raw_url:
             return ""
@@ -58,128 +80,45 @@ class LinkedInFinder:
             except Exception:
                 pass
 
-        return raw_url
+        return raw_url.split("?")[0]
 
-    def fetch_job_description_skills(self, job_id: str) -> List[str]:
+    def search_recruiter_posts_yahoo(self, query: str, max_results: int = DEFAULT_MAX_RESULTS) -> List[str]:
         """
-        Fetches detailed job posting description from LinkedIn Guest API and extracts required skills.
+        Searches Yahoo for indexed LinkedIn recruiter posts.
         """
-        if not job_id:
-            return []
+        post_urls = []
         try:
-            url = f"https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}"
-            with httpx.Client(headers=self.headers, timeout=6.0, follow_redirects=True) as client:
-                resp = client.get(url)
-                if resp.status_code == 200:
-                    soup = BeautifulSoup(resp.text, "html.parser")
-                    desc = soup.find("div", class_="show-more-less-html__markup")
-                    if desc:
-                        text_lower = desc.get_text().lower()
-                        return sorted(list({
-                            s.title() for s in self.skills_taxonomy 
-                            if re.search(r'(?:\b|\W)' + re.escape(s) + r'(?:\b|\W)', text_lower)
-                        }))
-        except Exception:
-            pass
-        return []
-
-    def search_linkedin_guest_api(
-        self,
-        keywords: str,
-        location: str = DEFAULT_LOCATION,
-        timeframe: Optional[str] = DEFAULT_TIMEFRAME,
-        remote_only: bool = False,
-        max_results: int = DEFAULT_MAX_RESULTS
-    ) -> List[Dict[str, Any]]:
-        """
-        Direct high-speed query to LinkedIn's official public jobs & hiring feed.
-        """
-        results = []
-        try:
-            url = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
-            
-            tpr_map = {
-                "d": "r86400",     # 24 hours
-                "w": "r604800",    # 7 days / past week
-                "m": "r2592000"    # 30 days
-            }
-            f_TPR = tpr_map.get(timeframe, "r604800")
-
-            params = {
-                "keywords": keywords,
-                "location": location or "India",
-                "f_TPR": f_TPR,
-                "start": 0
-            }
-            if remote_only or (location and "remote" in location.lower()):
-                params["f_WT"] = "2"  # Remote filter
-
-            with httpx.Client(headers=self.headers, timeout=12.0, follow_redirects=True) as client:
+            url = "https://search.yahoo.com/search"
+            params = {"p": query, "n": max_results * 2, "age": "1w", "bt": "1w"}
+            with httpx.Client(headers=self.headers, timeout=10.0, follow_redirects=True) as client:
                 resp = client.get(url, params=params)
                 if resp.status_code == 200:
                     soup = BeautifulSoup(resp.text, "html.parser")
-                    cards = soup.find_all("li")
-                    
-                    for c in cards:
-                        title_el = c.find("h3", class_="base-search-card__title")
-                        comp_el = c.find("h4", class_="base-search-card__subtitle")
-                        loc_el = c.find("span", class_="job-search-card__location")
-                        link_el = c.find("a", class_="base-card__full-link")
-                        time_el = c.find("time")
+                    for a in soup.find_all("a"):
+                        raw_href = a.get("href", "")
+                        clean_href = self.clean_linkedin_url(raw_href)
+                        if self.is_valid_recruiter_post_url(clean_href):
+                            if clean_href not in post_urls:
+                                post_urls.append(clean_href)
+        except Exception:
+            pass
+        return post_urls
 
-                        if not title_el or not link_el:
-                            continue
+    def build_post_queries(self, keywords: str, location: str = DEFAULT_LOCATION) -> List[str]:
+        """
+        Builds precision dorking queries targeting LinkedIn Posts only.
+        """
+        kw = re.sub(r'[/\\()|]', ' ', keywords)
+        kw = re.sub(r'\s+', ' ', kw).replace('"', '').strip()
+        loc = location.replace('"', '').strip() if location else ""
 
-                        title = title_el.get_text(strip=True)
-                        comp = comp_el.get_text(strip=True) if comp_el else "Hiring Company"
-                        loc = loc_el.get_text(strip=True) if loc_el else location
-                        raw_link = link_el.get("href", "")
-                        clean_link = raw_link.split("?")[0] if raw_link else ""
-                        posted_str = time_el.get_text(strip=True) if time_el else "Recently"
-
-                        # Extract Job ID from URL (e.g. ...-4455026730)
-                        job_id_match = re.search(r'-(\d+)(?:$|\?)', clean_link)
-                        job_id = job_id_match.group(1) if job_id_match else ""
-
-                        # Extract skills from title & query first
-                        combined_text = f"{title} {comp} {loc} {keywords}"
-                        skills = {
-                            s.title() for s in self.skills_taxonomy 
-                            if re.search(r'(?:\b|\W)' + re.escape(s) + r'(?:\b|\W)', combined_text.lower())
-                        }
-
-                        # Optionally enrich with job description skills for top 3 items
-                        if len(results) < 3 and job_id:
-                            deep_skills = self.fetch_job_description_skills(job_id)
-                            skills.update(deep_skills)
-
-                        # Work mode
-                        if remote_only or "remote" in loc.lower() or "remote" in title.lower() or "wfh" in title.lower():
-                            work_mode = "Remote / WFH"
-                        elif "hybrid" in loc.lower() or "hybrid" in title.lower():
-                            work_mode = "Hybrid"
-                        else:
-                            work_mode = "On-Site"
-
-                        results.append({
-                            "title": title,
-                            "company": comp,
-                            "work_mode": work_mode,
-                            "salary_range": "Competitive / As per industry standards",
-                            "experience_required": "1-3+ Years (Estimated)",
-                            "required_skills": sorted(list(skills)),
-                            "contact_emails": [],
-                            "application_links": [clean_link] if clean_link else [],
-                            "post_url": clean_link,
-                            "raw_snippet": f"Role: {title} at {comp}. Location: {loc}. Posted: {posted_str}."
-                        })
-
-                        if len(results) >= max_results:
-                            break
-        except Exception as e:
-            print(f"[LinkedInFinder] Direct Guest API notice: {e}", file=sys.stderr)
-
-        return results
+        return [
+            f'site:linkedin.com/posts {kw} hiring {loc}'.strip(),
+            f'site:linkedin.com/feed/update {kw} hiring {loc}'.strip(),
+            f'site:linkedin.com/posts {kw} {loc} hiring'.strip(),
+            f'site:linkedin.com/posts {kw} "hiring"'.strip(),
+            f'site:linkedin.com/feed/update {kw} hiring'.strip()
+        ]
 
     def search_hiring_posts(
         self, 
@@ -190,35 +129,49 @@ class LinkedInFinder:
         max_results: int = DEFAULT_MAX_RESULTS
     ) -> List[Dict[str, Any]]:
         """
-        Primary search function: checks cache, queries LinkedIn direct guest search,
-        enriches metadata, and caches results for instant sub-second retrieval.
+        Searches ONLY for genuine LinkedIn recruiter/founder posts.
+        Fetches and extracts full post text, author, HR emails, phone numbers, and required skills.
         """
-        cache_key = f"{keywords}::{location}::{remote_only}::{max_results}"
+        cache_key = f"recruiter_posts::{keywords}::{location}::{remote_only}::{max_results}"
         cached = self.cache.get(cache_key)
         if cached is not None and len(cached) > 0:
             return cached
 
-        # 1. Direct LinkedIn Live Verified Search
-        posts = self.search_linkedin_guest_api(
-            keywords=keywords,
-            location=location,
-            timeframe=timeframe,
-            remote_only=remote_only,
-            max_results=max_results
-        )
+        queries = self.build_post_queries(keywords, location)
+        found_urls = []
 
-        # 2. Location Broadening Fallback if specific city yielded 0 results
-        if not posts and location and location.lower() not in ["india", "remote", ""]:
-            posts = self.search_linkedin_guest_api(
-                keywords=keywords,
-                location="India",
-                timeframe=timeframe,
-                remote_only=remote_only,
-                max_results=max_results
+        for q in queries:
+            urls = self.search_recruiter_posts_yahoo(q, max_results=max_results)
+            for u in urls:
+                if u not in found_urls and self.is_valid_recruiter_post_url(u):
+                    found_urls.append(u)
+            if len(found_urls) >= max_results:
+                break
+
+        parsed_posts = []
+        for post_url in found_urls[:max_results]:
+            post_data = LinkedInPostExtractor.extract_from_url(
+                url=post_url,
+                skills_taxonomy=self.skills_taxonomy
             )
+            if post_data and "error" not in post_data:
+                # Structure output format
+                parsed_posts.append({
+                    "title": post_data.get("job_role", keywords),
+                    "company": post_data.get("author", "Hiring Recruiter"),
+                    "author": post_data.get("author", "Hiring Recruiter"),
+                    "work_mode": "Remote / WFH" if "remote" in post_data.get("full_post_content", "").lower() else "On-Site / Unspecified",
+                    "salary_range": "Competitive / Disclosed in post",
+                    "experience_required": "1-3+ Years (Estimated)",
+                    "required_skills": post_data.get("detected_skills", []),
+                    "contact_emails": post_data.get("recruiter_emails", []),
+                    "contact_phones": post_data.get("contact_numbers", []),
+                    "application_links": [post_url],
+                    "post_url": post_url,
+                    "raw_snippet": post_data.get("full_post_content", "")[:350]
+                })
 
-        # 3. Cache results
-        if posts:
-            self.cache.set(cache_key, posts)
+        if parsed_posts:
+            self.cache.set(cache_key, parsed_posts)
 
-        return posts
+        return parsed_posts
