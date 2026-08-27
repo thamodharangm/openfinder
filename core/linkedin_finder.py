@@ -31,12 +31,36 @@ class LinkedInFinder:
         }
 
     def clean_linkedin_url(self, raw_url: str) -> str:
-        """Decodes Yahoo/search redirect wrappers into direct LinkedIn URLs."""
+        """
+        Decodes Yahoo (/RU=) and Bing (&u=a1...) redirect wrappers into direct LinkedIn URLs.
+        """
+        if not raw_url:
+            return ""
+
+        # 1. Decode Yahoo redirect wrapper
         if "RU=" in raw_url:
             match = re.search(r'RU=([^/&]+)', raw_url)
             if match:
-                decoded = urllib.parse.unquote(match.group(1))
-                return decoded
+                return urllib.parse.unquote(match.group(1))
+
+        # 2. Decode Bing Base64 redirect wrapper
+        if "bing.com/ck/" in raw_url or "u=a1" in raw_url:
+            try:
+                parsed_q = urllib.parse.parse_qs(urllib.parse.urlparse(raw_url).query)
+                u_val = parsed_q.get("u", [""])[0]
+                if u_val:
+                    b64_str = u_val[2:] if u_val.startswith("a1") else u_val
+                    # Pad Base64 if needed
+                    padding = 4 - (len(b64_str) % 4)
+                    if padding != 4:
+                        b64_str += "=" * padding
+                    import base64
+                    decoded = base64.b64decode(b64_str).decode("utf-8", errors="ignore")
+                    if "linkedin.com" in decoded:
+                        return decoded
+            except Exception:
+                pass
+
         return raw_url
 
     def is_within_past_week(self, text: str) -> bool:
