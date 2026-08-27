@@ -1,8 +1,20 @@
-# 🎯 LinkedIn Job Scout & Resume Matcher MCP Server
+<p align="center">
+  <img src="assets/logo.jpg" alt="OpenFinder Logo" width="220" style="border-radius: 20px;" />
+</p>
 
-An intelligent **Model Context Protocol (MCP) Server** that connects **Claude Desktop**, **ChatGPT**, and other AI agents directly to LinkedIn's hiring feed.
+<h1 align="center">🎯 OpenFinder v2.0 - Professional AI Career Suite</h1>
 
-Simply point to your **Resume PDF**, and Claude/ChatGPT will automatically extract your skills, find recent hiring posts from recruiters on LinkedIn, calculate match percentages, filter out spam/clickbait, and draft customized Cold DMs/Emails.
+<p align="center">
+  <strong>Universal AI Job Scout, Resume Matcher & Recruiter Intelligence Engine</strong><br>
+  <em>Compatible with ChatGPT Actions, Claude Desktop MCP, Cursor & Multi-Agent Systems</em>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.10+-blue.svg" />
+  <img src="https://img.shields.io/badge/FastAPI-v0.110+-009688.svg" />
+  <img src="https://img.shields.io/badge/MCP-Protocol-purple.svg" />
+  <img src="https://img.shields.io/badge/License-MIT-green.svg" />
+</p>
 
 ---
 
