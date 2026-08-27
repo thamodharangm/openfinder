@@ -150,18 +150,17 @@ class LinkedInFinder:
             formatted = []
             for sp in session_posts:
                 formatted.append({
-                    "title": sp.get("job_role", keywords),
-                    "company": sp.get("company") or sp.get("author", "Hiring Recruiter"),
+                    "title": sp.get("role", keywords),
+                    "company": sp.get("company", "Hiring Team"),
                     "author": sp.get("author", "Hiring Recruiter"),
-                    "work_mode": "Remote / WFH" if "remote" in sp.get("full_post_content", "").lower() else "On-Site / Unspecified",
-                    "salary_range": "Competitive / Disclosed in post",
-                    "experience_required": "1-3+ Years (Estimated)",
-                    "required_skills": sp.get("detected_skills", []),
+                    "work_mode": "On-Site / Remote",
+                    "location": sp.get("location", location),
+                    "required_skills": sp.get("skills", []),
                     "contact_emails": sp.get("recruiter_emails", []),
-                    "contact_phones": sp.get("contact_numbers", []),
+                    "contact_phones": sp.get("contact_phones", []),
                     "application_links": [sp.get("post_url", "")],
                     "post_url": sp.get("post_url", ""),
-                    "raw_snippet": sp.get("full_post_content", "")[:350]
+                    "connection_pitch": sp.get("connection_pitch", "")
                 })
             self.cache.set(cache_key, formatted)
             return formatted

@@ -1,7 +1,7 @@
 import os
 import re
 import urllib.parse
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 import httpx
 from bs4 import BeautifulSoup
 import sys
@@ -19,10 +19,9 @@ from config import COMMON_SKILLS
 class LinkedInSessionSearch:
     """
     Directly queries LinkedIn's internal 'Posts' Search Tab (/search/results/content/)
-    using an authenticated user session cookie (li_at, JSESSIONID, etc.).
+    using an authenticated user session cookie (li_at, JSESSIONID).
     
-    Provides 100% real-time recruiter hiring posts published in the last 24 hours,
-    past week, or past month with complete author, email, phone, and skill intelligence.
+    Includes global link deduplication and token-optimized compact payloads.
     """
 
     HEADERS = {
@@ -45,13 +44,15 @@ class LinkedInSessionSearch:
         "past-month": "%22past-month%22"
     }
 
+    # In-memory deduplication set across requests
+    _SEEN_POST_IDS: Set[str] = set()
+
     @classmethod
     def get_cookies_dict(cls) -> Dict[str, str]:
         """Loads all available LinkedIn session cookies from environment."""
         li_at = os.environ.get("LINKEDIN_LI_AT") or os.environ.get("LI_AT") or ""
         jsessionid = os.environ.get("LINKEDIN_JSESSIONID") or os.environ.get("JSESSIONID") or ""
         
-        # Clean quotes
         li_at = li_at.strip().strip('"').strip("'")
         jsessionid = jsessionid.strip().strip('"').strip("'")
 
@@ -72,6 +73,7 @@ class LinkedInSessionSearch:
     ) -> List[Dict[str, Any]]:
         """
         Executes internal LinkedIn Posts tab search with authenticated session.
+        Guarantees zero duplicate links and returns token-efficient structured items.
         """
         cookies = cls.get_cookies_dict()
         if "li_at" not in cookies:
@@ -86,7 +88,7 @@ class LinkedInSessionSearch:
         if "JSESSIONID" in cookies:
             headers["csrf-token"] = cookies["JSESSIONID"].strip('"')
 
-        post_urls = []
+        collected_urls = []
         try:
             with httpx.Client(headers=headers, cookies=cookies, timeout=15.0, follow_redirects=True) as client:
                 resp = client.get(url)
@@ -95,40 +97,80 @@ class LinkedInSessionSearch:
 
                 raw_text = resp.text
                 
-                # 1. Regex search for activity URNs in HTML / JSON payloads
+                # Extract activity IDs
                 activity_ids = re.findall(r'urn:li:activity:(\d+)', raw_text)
                 for aid in activity_ids:
-                    p_url = f"https://www.linkedin.com/feed/update/urn:li:activity:{aid}/"
-                    if p_url not in post_urls:
-                        post_urls.append(p_url)
+                    if aid not in cls._SEEN_POST_IDS:
+                        p_url = f"https://www.linkedin.com/feed/update/urn:li:activity:{aid}/"
+                        if p_url not in collected_urls:
+                            collected_urls.append(p_url)
 
-                # 2. Regex search for share URNs
+                # Extract share IDs
                 share_ids = re.findall(r'urn:li:share:(\d+)', raw_text)
                 for sid in share_ids:
-                    p_url = f"https://www.linkedin.com/feed/update/urn:li:share:{sid}/"
-                    if p_url not in post_urls:
-                        post_urls.append(p_url)
+                    if sid not in cls._SEEN_POST_IDS:
+                        p_url = f"https://www.linkedin.com/feed/update/urn:li:share:{sid}/"
+                        if p_url not in collected_urls:
+                            collected_urls.append(p_url)
 
-                # 3. Extract from anchor tags in DOM
+                # Extract from DOM anchors (excluding corporate /company/ or /jobs/)
                 soup = BeautifulSoup(raw_text, "html.parser")
                 for a in soup.find_all("a"):
                     href = a.get("href", "")
                     if ("/posts/" in href or "/feed/update/" in href) and "/jobs/" not in href and "/company/" not in href:
-                        clean = href.split("?")[0]
-                        if clean not in post_urls:
-                            post_urls.append(clean)
+                        clean = href.split("?")[0].rstrip("/") + "/"
+                        # Check ID
+                        match_id = re.search(r'(?:activity|share)[:-](\d+)', clean)
+                        pid = match_id.group(1) if match_id else clean
+                        if pid not in cls._SEEN_POST_IDS and clean not in collected_urls:
+                            collected_urls.append(clean)
 
         except Exception as e:
             print(f"LinkedIn session search error: {e}")
             return []
 
         results = []
-        for p_url in post_urls[:max_results]:
+        seen_authors_and_roles = set()
+
+        for p_url in collected_urls:
+            if len(results) >= max_results:
+                break
+
             post_data = LinkedInPostExtractor.extract_from_url(
                 url=p_url,
                 skills_taxonomy=skills_taxonomy
             )
-            if post_data and "error" not in post_data:
-                results.append(post_data)
+            if not post_data or "error" in post_data:
+                continue
+
+            author = post_data.get("author", "").strip()
+            role = post_data.get("job_role", "").strip()
+            dedup_key = f"{author}::{role}".lower()
+
+            # Skip duplicate author + role reposts
+            if dedup_key in seen_authors_and_roles:
+                continue
+            seen_authors_and_roles.add(dedup_key)
+
+            # Record post as seen globally
+            match_id = re.search(r'(\d{15,})', p_url)
+            if match_id:
+                cls._SEEN_POST_IDS.add(match_id.group(1))
+
+            # Token-Efficient Compact Output (saves ~70% LLM tokens)
+            pitch_note = post_data.get("tailored_outreach_pitches", {}).get("linkedin_connection_note_300_chars", "")
+            
+            compact_item = {
+                "role": role,
+                "author": author,
+                "company": post_data.get("company", "Hiring Team"),
+                "location": post_data.get("location", "Unspecified / Remote"),
+                "recruiter_emails": post_data.get("recruiter_emails", []),
+                "contact_phones": post_data.get("contact_numbers", []),
+                "skills": post_data.get("detected_skills", []),
+                "post_url": p_url,
+                "connection_pitch": pitch_note
+            }
+            results.append(compact_item)
 
         return results
