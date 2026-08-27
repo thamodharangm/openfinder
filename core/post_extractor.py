@@ -28,6 +28,71 @@ class LinkedInPostExtractor:
     EMAIL_REGEX = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
     PHONE_REGEX = r'(?:\+91[\-\s]?)?[6789]\d{9}'
 
+    @staticmethod
+    def normalize_skills(skills: List[str]) -> List[str]:
+        """Normalizes skill naming variants into clean, standard labels."""
+        mapping = {
+            "react.js": "React",
+            "reactjs": "React",
+            "react": "React",
+            "node.js": "Node.js",
+            "nodejs": "Node.js",
+            "express.js": "Express.js",
+            "expressjs": "Express.js",
+            "express": "Express.js",
+            "next.js": "Next.js",
+            "nextjs": "Next.js",
+            "vue.js": "Vue.js",
+            "vuejs": "Vue.js",
+            "angular.js": "Angular",
+            "angularjs": "Angular",
+            "tailwindcss": "Tailwind CSS",
+            "tailwind": "Tailwind CSS",
+            "mongodb": "MongoDB",
+            "postgresql": "PostgreSQL",
+            "postgres": "PostgreSQL",
+            "mysql": "MySQL",
+            "fastapi": "FastAPI",
+            "django": "Django",
+            "flask": "Flask",
+            "typescript": "TypeScript",
+            "javascript": "JavaScript",
+            "python": "Python",
+            "docker": "Docker",
+            "kubernetes": "Kubernetes",
+            "git": "Git"
+        }
+        normalized = set()
+        for s in skills:
+            s_clean = s.strip().lower()
+            if s_clean in mapping:
+                normalized.add(mapping[s_clean])
+            else:
+                normalized.add(s.title())
+        return sorted(list(normalized))
+
+    @staticmethod
+    def extract_company(text: str, emails: List[str], author: str) -> str:
+        """Infers the hiring company name from email domains, author headline, or post text."""
+        for e in emails:
+            domain = e.split("@")[-1].split(".")[0].lower()
+            if domain not in ["gmail", "yahoo", "outlook", "hotmail", "proton", "icloud", "rediffmail"]:
+                return domain.capitalize()
+
+        comp_patterns = [
+            r'(?:at|@)\s+([A-Z][a-zA-Z0-9&]+)',
+            r'company\s*:\s*([A-Za-z0-9& ]+)',
+            r'hiring\s+(?:for\s+)([A-Z][a-zA-Z0-9&]+)'
+        ]
+        for pat in comp_patterns:
+            match = re.search(pat, text)
+            if match:
+                c = match.group(1).strip()
+                if c.lower() not in ["we", "the", "our", "an", "immediate", "urgent", "delhi", "bangalore", "mumbai", "chennai"]:
+                    return c
+
+        return "the Hiring Team"
+
     @classmethod
     def extract_from_url(
         cls, 
@@ -38,7 +103,7 @@ class LinkedInPostExtractor:
         candidate_exp_years: int = 2
     ) -> Dict[str, Any]:
         """
-        Parses LinkedIn recruiter post URL, extracting author, HR emails, phones,
+        Parses LinkedIn recruiter post URL, extracting author, company, HR emails, phones,
         skills, calculates resume match score % & gaps, and generates customized outreach pitches.
         """
         skills_taxonomy = skills_taxonomy or COMMON_SKILLS
@@ -77,12 +142,16 @@ class LinkedInPostExtractor:
                 # Extract phone numbers
                 phones = list(set(re.findall(cls.PHONE_REGEX, full_text)))
 
-                # Extract skills
+                # Extract skills & normalize
                 text_lower = (full_text + " " + title_str).lower()
-                skills = sorted(list({
+                raw_skills = [
                     s.title() for s in skills_taxonomy 
                     if re.search(r'(?:\b|\W)' + re.escape(s) + r'(?:\b|\W)', text_lower)
-                }))
+                ]
+                skills = cls.normalize_skills(raw_skills)
+
+                # Extract company
+                company = cls.extract_company(full_text, emails, author)
 
                 # Extract location hints
                 loc_match = re.search(r'(?:📍\s*location|location|city|in)\s*:\s*([A-Za-z\s]+)', full_text, re.IGNORECASE)
@@ -107,16 +176,18 @@ class LinkedInPostExtractor:
                 # Generate customized recruiter pitches
                 pitches = OutreachPitchGenerator.generate_suite(
                     job_title=role,
-                    company_name="the Hiring Team",
+                    company_name=company,
                     matched_skills=pitch_skills if pitch_skills else ["Full Stack Development"],
                     candidate_name=candidate_name,
-                    candidate_exp_years=candidate_exp_years if isinstance(candidate_exp_years, int) else 2
+                    candidate_exp_years=candidate_exp_years if isinstance(candidate_exp_years, int) else 2,
+                    recipient_name=author
                 )
 
                 result = {
                     "status": "success",
                     "post_url": clean_url,
                     "author": author,
+                    "company": company,
                     "job_role": role,
                     "location": location,
                     "recruiter_emails": emails,

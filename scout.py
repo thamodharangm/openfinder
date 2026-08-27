@@ -24,14 +24,14 @@ from core.post_extractor import LinkedInPostExtractor
 
 def main():
     parser = argparse.ArgumentParser(
-        description="🎯 OpenFinder CLI - Search Live LinkedIn Jobs & Match Your Resume",
+        description="🎯 OpenFinder CLI - Search Live LinkedIn Recruiter Posts & Match Your Resume",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python scout.py "React Developer" "Bangalore"
-  python scout.py "Python FastAPI" "Remote" --results 5
-  python scout.py --resume my_resume.pdf --location "Chennai"
   python scout.py --post "https://www.linkedin.com/posts/..."
+  python scout.py --post "https://www.linkedin.com/posts/..." --resume my_resume.pdf
+  python scout.py "React Developer" "Bangalore"
+  python scout.py --resume my_resume.pdf --location "Chennai"
         """
     )
     parser.add_argument("role", nargs="?", default="Software Engineer", help="Job role / keywords (e.g. 'React Developer', 'Python Django')")
@@ -52,12 +52,18 @@ Examples:
         if args.resume:
             pdf_path = Path(args.resume)
             if pdf_path.exists():
-                print(f"📄 Parsing Candidate Resume: {pdf_path.name}...")
+                print("=" * 65)
+                print(f"📄 Parsing Candidate Resume: {pdf_path.name}")
+                print("=" * 65)
                 candidate_profile = ResumeParser().parse(str(pdf_path))
-                print(f"   Candidate: {candidate_profile.get('candidate_name')} | Exp: {candidate_profile.get('years_of_experience')} Yrs")
+                print(f"• Candidate: {candidate_profile.get('candidate_name')} ({candidate_profile.get('candidate_email', 'No email')})")
+                print(f"• Experience: {candidate_profile.get('years_of_experience')} Yrs ({candidate_profile.get('seniority_level')})")
+                print(f"• Top Skills: {', '.join(candidate_profile.get('top_skills', [])[:8])}...")
+            else:
+                print(f"⚠️ Warning: Resume file '{args.resume}' not found on disk. Proceeding with standard extraction.\n")
 
         print("=" * 65)
-        print(f"🔗 Extracting Intelligence from LinkedIn Post...")
+        print(f"🔗 Extracting Intelligence from LinkedIn Recruiter Post...")
         print("=" * 65)
         post_data = LinkedInPostExtractor.extract_from_url(
             url=args.post,
@@ -67,17 +73,20 @@ Examples:
             print(f"❌ {post_data['error']}")
             return
 
-        print(f"• Author: {post_data.get('author')}")
+        print(f"• Poster / Author: {post_data.get('author')}")
+        print(f"• Company: {post_data.get('company')}")
         print(f"• Role: {post_data.get('job_role')}")
         print(f"• Location: {post_data.get('location')}")
-        print(f"• Recruiter Emails: {', '.join(post_data.get('recruiter_emails', [])) or 'None found'}")
+        print(f"• Recruiter Emails: {', '.join(post_data.get('recruiter_emails', [])) or 'None found (DM required)'}")
         print(f"• Contact Phone: {', '.join(post_data.get('contact_numbers', [])) or 'None found'}")
-        print(f"• Post Skills Required: {', '.join(post_data.get('detected_skills', []))}")
+        print(f"• Required Skills: {', '.join(post_data.get('detected_skills', []))}")
 
         # If matched against resume, show ATS match data
         if "match_analysis" in post_data:
             ma = post_data["match_analysis"]
-            print("\n🎯 ATS Match Analysis against Your Resume:")
+            print("\n" + "=" * 65)
+            print("🎯 ATS Match Analysis against Your Resume:")
+            print("=" * 65)
             print(f"  • Match Score: {ma['match_score']}% ({ma['match_grade']})")
             print(f"  • Matched Skills: {', '.join(ma.get('matched_skills', []))}")
             if ma.get("missing_skills"):
@@ -85,8 +94,17 @@ Examples:
             if ma.get("ats_recommendations"):
                 print(f"  • ATS Advice: {ma['ats_recommendations'][0]}")
 
-        print("\n✉️ Customized Outreach Pitch:")
-        print(f"\"{post_data.get('tailored_outreach_pitches', {}).get('linkedin_connection_note_300_chars')}\"")
+        pitches = post_data.get('tailored_outreach_pitches', {})
+        print("\n" + "=" * 65)
+        print("✉️ Personalized Recruiter Outreach Suite:")
+        print("=" * 65)
+        print("\n[A] LinkedIn Connection Note (<300 chars):")
+        print(f"\"{pitches.get('linkedin_connection_note_300_chars')}\"")
+
+        if post_data.get('recruiter_emails'):
+            print(f"\n[B] Formal Cover Email to HR ({post_data['recruiter_emails'][0]}):")
+            print("-" * 50)
+            print(pitches.get('formal_cover_email'))
         return
 
     # Mode 1: Resume Matcher
@@ -112,7 +130,7 @@ Examples:
         if len(top_skills) >= 2:
             search_kw = f"{top_skills[0]} {top_skills[1]}"
 
-        print(f"\n🔍 Searching Live Matching Jobs ({search_kw} in {target_location})...")
+        print(f"\n🔍 Searching Live Matching Recruiter Posts ({search_kw} in {target_location})...")
         posts = finder.search_hiring_posts(
             keywords=search_kw,
             location=target_location,
@@ -121,21 +139,21 @@ Examples:
         )
 
         ranked = JobMatcher.rank_and_score_posts(profile, posts, min_score=30)
-        print(f"🎯 Found {len(ranked)} Matched Jobs:\n")
+        print(f"🎯 Found {len(ranked)} Matched Posts:\n")
 
         for idx, job in enumerate(ranked[:args.results], 1):
-            print(f"[{idx}] {job['title']} @ {job['company']}")
+            print(f"[{idx}] {job['title']} by {job['company']}")
             print(f"    Match Score: {job['match_score']}% ({job['match_grade']})")
             print(f"    Matched Skills: {job.get('matched_skills', [])}")
             if job.get("missing_skills"):
                 print(f"    Missing Skills: {job.get('missing_skills', [])}")
-            print(f"    Apply Link: {job['post_url']}")
+            print(f"    Post URL: {job['post_url']}")
             print("-" * 65)
 
     # Mode 2: Direct Keyword Search
     else:
         print("=" * 65)
-        print(f"🔍 Searching Live LinkedIn Jobs: '{args.role}' in '{target_location}'...")
+        print(f"🔍 Searching Live LinkedIn Recruiter Posts: '{args.role}' in '{target_location}'...")
         print("=" * 65)
 
         posts = finder.search_hiring_posts(
@@ -146,16 +164,18 @@ Examples:
         )
 
         if not posts:
-            print("⚠️ No job posts found for this query. Try broader keywords or location.")
+            print("⚠️ No direct recruiter posts found for this query in cache. Use --post <URL> for direct post extraction.")
             return
 
-        print(f"✅ Found {len(posts)} Verified Live Jobs:\n")
+        print(f"✅ Found {len(posts)} Verified Live Recruiter Posts:\n")
         for idx, post in enumerate(posts, 1):
             print(f"[{idx}] {post['title']}")
-            print(f"    🏢 Company: {post['company']} | 📍 Mode: {post['work_mode']}")
+            print(f"    👤 Recruiter: {post['company']} | 📍 Mode: {post['work_mode']}")
             if post.get("required_skills"):
                 print(f"    🛠️ Skills: {', '.join(post['required_skills'])}")
-            print(f"    🔗 Apply Link: {post['post_url']}")
+            if post.get("contact_emails"):
+                print(f"    📧 Email: {', '.join(post['contact_emails'])}")
+            print(f"    🔗 Post URL: {post['post_url']}")
             print("-" * 65)
 
 
