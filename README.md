@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="openfinderlogo.svg" alt="OpenFinder Logo" width="220" />
+  <img src="openfinderlogo.svg" alt="OpenFinder Logo" width="420" />
 </p>
 
 <h1 align="center">🎯 OpenFinder v2.0 - Universal AI LinkedIn Scout & Recruiter Intelligence</h1>
