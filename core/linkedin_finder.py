@@ -12,6 +12,7 @@ from config import COMMON_SKILLS, DEFAULT_LOCATION, DEFAULT_TIMEFRAME, DEFAULT_M
 from core.spam_filter import is_spam_or_bait
 from core.cache import SearchCache
 from core.post_extractor import LinkedInPostExtractor
+from core.linkedin_session import LinkedInSessionSearch
 
 
 class LinkedInFinder:
@@ -205,7 +206,18 @@ class LinkedInFinder:
         if cached is not None and len(cached) > 0:
             return cached
 
-        # Clean keywords
+        # 1. First priority: Authenticated LinkedIn Session Search (Posts Tab)
+        session_results = LinkedInSessionSearch.search_posts_internal(
+            keywords=keywords,
+            date_posted=date_posted or "past-week",
+            max_results=max_results,
+            skills_taxonomy=self.skills_taxonomy
+        )
+        if session_results:
+            self.cache.set(cache_key, session_results)
+            return session_results
+
+        # 2. Fallback: Search Engine Mirror Dorking
         clean_kw = re.sub(r'[/\\()|]', ' ', keywords)
         clean_kw = re.sub(r'\s+', ' ', clean_kw).replace('"', '').strip()
 

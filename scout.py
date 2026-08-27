@@ -1,6 +1,10 @@
+import os
 import sys
 import argparse
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Ensure UTF-8 stdout on Windows terminals
 if sys.platform == "win32":
@@ -58,7 +62,12 @@ Examples:
             max_results=args.results
         )
         if not posts:
-            print("⚠️ No LinkedIn posts found matching this query in cache or search mirrors.")
+            print("⚠️ No direct recruiter posts found via search engine mirrors.")
+            if not os.environ.get("LINKEDIN_LI_AT"):
+                print("\n💡 Tip: To search live hiring posts published in the last 24h directly from LinkedIn's internal 'Posts' Tab,")
+                print("   add your session cookie to a .env file:")
+                print("   LINKEDIN_LI_AT=your_cookie_here")
+                print("   (To get it: In Chrome/Edge, open linkedin.com -> Press F12 -> Application -> Cookies -> Copy 'li_at' value)")
             return
 
         print(f"✅ Found {len(posts)} Posts:\n")
