@@ -23,6 +23,9 @@ BASE_DIR = Path(__file__).resolve().parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from core.resume_parser import ResumeParser
 from core.linkedin_finder import LinkedInFinder
 from core.matcher import JobMatcher

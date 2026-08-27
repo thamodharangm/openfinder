@@ -138,6 +138,35 @@ class LinkedInFinder:
         if cached is not None and len(cached) > 0:
             return cached
 
+        # 1. First priority: Authenticated LinkedIn Session Search (Posts Tab)
+        search_query = f"{keywords} hiring {location}".strip() if location and location.lower() != "india" else f"{keywords} hiring".strip()
+        session_posts = LinkedInSessionSearch.search_posts_internal(
+            keywords=search_query,
+            date_posted="past-week",
+            max_results=max_results,
+            skills_taxonomy=self.skills_taxonomy
+        )
+        if session_posts:
+            formatted = []
+            for sp in session_posts:
+                formatted.append({
+                    "title": sp.get("job_role", keywords),
+                    "company": sp.get("company") or sp.get("author", "Hiring Recruiter"),
+                    "author": sp.get("author", "Hiring Recruiter"),
+                    "work_mode": "Remote / WFH" if "remote" in sp.get("full_post_content", "").lower() else "On-Site / Unspecified",
+                    "salary_range": "Competitive / Disclosed in post",
+                    "experience_required": "1-3+ Years (Estimated)",
+                    "required_skills": sp.get("detected_skills", []),
+                    "contact_emails": sp.get("recruiter_emails", []),
+                    "contact_phones": sp.get("contact_numbers", []),
+                    "application_links": [sp.get("post_url", "")],
+                    "post_url": sp.get("post_url", ""),
+                    "raw_snippet": sp.get("full_post_content", "")[:350]
+                })
+            self.cache.set(cache_key, formatted)
+            return formatted
+
+        # 2. Fallback: Search Engine Mirror Dorking
         queries = self.build_post_queries(keywords, location)
         found_urls = []
 

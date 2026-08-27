@@ -2,6 +2,9 @@ import sys
 import os
 from pathlib import Path
 from typing import Optional, List, Dict, Any
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Ensure UTF-8 stdout/stderr on Windows terminals & MCP transports
 if sys.platform == "win32":
