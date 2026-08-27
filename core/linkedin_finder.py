@@ -12,115 +12,124 @@ from config import COMMON_SKILLS, DEFAULT_LOCATION, DEFAULT_TIMEFRAME, DEFAULT_M
 from core.spam_filter import is_spam_or_bait
 from core.post_parser import PostParser
 
-try:
-    from duckduckgo_search import DDGS
-    HAS_DDGS = True
-except ImportError:
-    HAS_DDGS = False
-
 
 class LinkedInFinder:
     """
-    Finds real-time LinkedIn hiring posts using search dorking queries (Zero ban risk).
-    Supports DuckDuckGo search API & fallback web scrapers.
+    Finds real-time LinkedIn hiring posts using multi-provider pure Python search.
+    Completely avoids native DLL conflicts and rate limit walls.
     """
 
     def __init__(self, skills_taxonomy: Optional[List[str]] = None):
         self.skills_taxonomy = skills_taxonomy or COMMON_SKILLS
-
-    def build_query_variations(self, keywords: str, location: str = DEFAULT_LOCATION, remote_only: bool = False) -> List[str]:
-        """
-        Builds progressive query variations from strict to broad to maximize search yields.
-        """
-        kw_clean = keywords.replace('"', '').strip()
-        loc_clean = location.replace('"', '').strip() if location else ""
-        remote_str = "remote" if remote_only else ""
-
-        # Strategy 1: Direct LinkedIn Posts & Updates
-        q1 = f'site:linkedin.com/posts/ OR site:linkedin.com/feed/ ("hiring" OR "we are hiring" OR "job opening") "{kw_clean}"'
-        if loc_clean:
-            q1 += f' "{loc_clean}"'
-        if remote_str:
-            q1 += f' {remote_str}'
-
-        # Strategy 2: Broad LinkedIn domain query
-        q2 = f'site:linkedin.com ("hiring" OR "job opening") "{kw_clean}"'
-        if loc_clean:
-            q2 += f' "{loc_clean}"'
-        if remote_str:
-            q2 += f' {remote_str}'
-
-        # Strategy 3: General search query targeting LinkedIn hiring discussions
-        q3 = f'linkedin hiring {kw_clean} {loc_clean} {remote_str}'.strip()
-
-        return [q1, q2, q3]
-
-    def search_duckduckgo(self, query: str, max_results: int = DEFAULT_MAX_RESULTS, timeframe: Optional[str] = DEFAULT_TIMEFRAME) -> List[Dict[str, Any]]:
-        """
-        Executes DuckDuckGo search using ddgs library.
-        timeframe: 'd' (day), 'w' (week), 'm' (month), or None
-        """
-        results = []
-        if not HAS_DDGS:
-            return results
-
-        try:
-            with DDGS() as ddgs:
-                ddg_results = ddgs.text(
-                    query,
-                    region="in-en" if "India" in query or "Bangalore" in query else "wt-wt",
-                    timelimit=timeframe if timeframe in ['d', 'w', 'm'] else None,
-                    max_results=max_results * 2
-                )
-                for item in ddg_results:
-                    link = item.get("href", "")
-                    if "linkedin.com" in link:
-                        results.append({
-                            "title": item.get("title", ""),
-                            "link": link,
-                            "snippet": item.get("body", "")
-                        })
-        except Exception as e:
-            print(f"[LinkedInFinder] DDGS error: {e}", file=sys.stderr)
-
-        return results
-
-    def search_html_fallback(self, query: str, max_results: int = DEFAULT_MAX_RESULTS) -> List[Dict[str, Any]]:
-        """
-        Direct HTTP fallback if DDGS library is unavailable.
-        """
-        results = []
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9"
         }
-        encoded_query = urllib.parse.quote(query)
-        url = f"https://html.duckduckgo.com/html/?q={encoded_query}"
 
+    def clean_linkedin_url(self, raw_url: str) -> str:
+        """Decodes Yahoo/search redirect wrappers into direct LinkedIn URLs."""
+        if "RU=" in raw_url:
+            match = re.search(r'RU=([^/&]+)', raw_url)
+            if match:
+                decoded = urllib.parse.unquote(match.group(1))
+                return decoded
+        return raw_url
+
+    def search_yahoo(self, query: str, max_results: int = DEFAULT_MAX_RESULTS) -> List[Dict[str, Any]]:
+        """
+        Primary search provider: Yahoo HTML search engine.
+        Returns high-quality, real-time indexed LinkedIn hiring posts.
+        """
+        results = []
         try:
-            with httpx.Client(headers=headers, timeout=10.0, follow_redirects=True) as client:
-                resp = client.get(url)
+            url = "https://search.yahoo.com/search"
+            params = {"p": query, "n": max_results * 2}
+            
+            with httpx.Client(headers=self.headers, timeout=12.0, follow_redirects=True) as client:
+                resp = client.get(url, params=params)
                 if resp.status_code == 200:
                     soup = BeautifulSoup(resp.text, "html.parser")
-                    links = soup.find_all("div", class_="result__body")
-                    for block in links[:max_results * 2]:
-                        title_el = block.find("a", class_="result__url")
-                        snippet_el = block.find("a", class_="result__snippet")
-                        link_el = block.find("a", class_="result__url")
-                        
-                        href = link_el["href"] if link_el and "href" in link_el.attrs else ""
-                        title = title_el.get_text(strip=True) if title_el else ""
+                    items = soup.find_all("div", class_="algo")
+                    
+                    for item in items:
+                        title_el = item.find("h3")
+                        link_el = item.find("a")
+                        snippet_el = item.find("div", class_="compText") or item.find("p")
+
+                        if not title_el or not link_el:
+                            continue
+
+                        title = title_el.get_text(strip=True)
+                        raw_link = link_el.get("href", "")
+                        clean_link = self.clean_linkedin_url(raw_link)
                         snippet = snippet_el.get_text(strip=True) if snippet_el else ""
 
-                        if "linkedin.com" in href:
+                        if "linkedin.com" in clean_link:
                             results.append({
                                 "title": title,
-                                "link": href,
+                                "link": clean_link,
                                 "snippet": snippet
                             })
         except Exception as e:
-            print(f"[LinkedInFinder] Fallback search error: {e}", file=sys.stderr)
+            print(f"[LinkedInFinder] Yahoo search error: {e}", file=sys.stderr)
 
         return results
+
+    def search_bing(self, query: str, max_results: int = DEFAULT_MAX_RESULTS) -> List[Dict[str, Any]]:
+        """
+        Secondary search provider: Bing HTML search engine.
+        """
+        results = []
+        try:
+            url = "https://www.bing.com/search"
+            params = {"q": query, "count": max_results * 2}
+            
+            with httpx.Client(headers=self.headers, timeout=12.0, follow_redirects=True) as client:
+                resp = client.get(url, params=params)
+                if resp.status_code == 200:
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                    items = soup.find_all("li", class_="b_algo")
+                    
+                    for item in items:
+                        title_el = item.find("h2")
+                        link_el = item.find("a")
+                        snippet_el = item.find("div", class_="b_caption") or item.find("p")
+
+                        if not title_el or not link_el:
+                            continue
+
+                        title = title_el.get_text(strip=True)
+                        clean_link = link_el.get("href", "")
+                        snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+
+                        if "linkedin.com" in clean_link:
+                            results.append({
+                                "title": title,
+                                "link": clean_link,
+                                "snippet": snippet
+                            })
+        except Exception as e:
+            print(f"[LinkedInFinder] Bing search error: {e}", file=sys.stderr)
+
+        return results
+
+    def build_queries(self, keywords: str, location: str = DEFAULT_LOCATION, remote_only: bool = False) -> List[str]:
+        """
+        Builds multiple search queries from specific post targets to broader hiring threads.
+        """
+        kw = keywords.replace('"', '').strip()
+        loc = location.replace('"', '').strip() if location else ""
+        remote = "remote" if remote_only else ""
+
+        # Query 1: Direct LinkedIn Post updates
+        q1 = f'site:linkedin.com/posts hiring "{kw}" {loc} {remote}'.strip()
+        # Query 2: Broader LinkedIn hiring searches
+        q2 = f'site:linkedin.com "we are hiring" "{kw}" {loc} {remote}'.strip()
+        # Query 3: Generic LinkedIn recruitment query
+        q3 = f'linkedin hiring {kw} {loc} {remote}'.strip()
+
+        return [q1, q2, q3]
 
     def search_hiring_posts(
         self, 
@@ -131,25 +140,26 @@ class LinkedInFinder:
         max_results: int = DEFAULT_MAX_RESULTS
     ) -> List[Dict[str, Any]]:
         """
-        Primary search function with multi-tier query fallback.
+        Primary search function: searches multi-tier providers, strips spam,
+        and extracts contact emails, apply links, and required skills.
         """
-        queries = self.build_query_variations(keywords, location, remote_only)
+        queries = self.build_queries(keywords, location, remote_only)
         all_raw = []
 
         for q in queries:
-            # 1. Try DuckDuckGo search
-            raw = self.search_duckduckgo(q, max_results=max_results, timeframe=timeframe)
-            if not raw and timeframe:
-                raw = self.search_duckduckgo(q, max_results=max_results, timeframe=None)
-            
-            # 2. Try HTML scraper fallback
-            if not raw:
-                raw = self.search_html_fallback(q, max_results=max_results)
-
+            # 1. Try Yahoo
+            raw = self.search_yahoo(q, max_results=max_results)
             if raw:
                 all_raw.extend(raw)
-                if len(all_raw) >= max_results:
-                    break
+
+            # 2. Try Bing if needed
+            if len(all_raw) < max_results:
+                raw_bing = self.search_bing(q, max_results=max_results)
+                if raw_bing:
+                    all_raw.extend(raw_bing)
+
+            if len(all_raw) >= max_results:
+                break
 
         # Deduplicate results by URL
         seen_urls = set()
@@ -157,7 +167,7 @@ class LinkedInFinder:
 
         for raw in all_raw:
             url = raw.get("link", "")
-            if url in seen_urls:
+            if not url or url in seen_urls:
                 continue
             seen_urls.add(url)
 
