@@ -31,6 +31,8 @@ venv.bak/
 # Environment Variables
 .env
 .env.local
+cookies.txt
+*.cookie
 
 # IDE & OS files
 .vscode/
