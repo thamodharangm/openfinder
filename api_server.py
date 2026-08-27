@@ -10,6 +10,14 @@ import uuid
 from pathlib import Path
 import sys
 
+# Ensure UTF-8 stdout/stderr on Windows terminals
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass
+
 # Ensure root in sys.path
 BASE_DIR = Path(__file__).resolve().parent
 if str(BASE_DIR) not in sys.path:

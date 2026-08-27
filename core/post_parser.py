@@ -52,19 +52,21 @@ class PostParser:
             match = re.search(pat, combined)
             if match:
                 comp = match.group(1).strip()
-                if comp.lower() not in ["we", "hiring", "immediate", "looking", "urgent"]:
+                if comp.lower() not in ["we", "hiring", "immediate", "looking", "urgent", "the", "our", "linkedin"]:
                     return comp
         
         # Fallback to cleaning from title
-        clean_title = re.sub(r'#\w+', '', title)
-        parts = clean_title.split('—')
-        if len(parts) > 1:
-            return parts[0].strip()
-        parts = clean_title.split('-')
-        if len(parts) > 1 and len(parts[0].strip()) < 30:
-            return parts[0].strip()
+        clean_title = re.sub(r'#\S+', '', title)
+        clean_title = re.sub(r'\.{2,}', '', clean_title)
+        
+        for sep in ['—', '|', '-']:
+            parts = clean_title.split(sep)
+            for p in parts:
+                p_clean = re.sub(r'[^\w\s&]', '', p).strip()
+                if 3 <= len(p_clean) <= 30 and p_clean.lower() not in ["linkedin", "hiring", "job opening", "job alert", "urgent requirement"]:
+                    return p_clean
 
-        return "Hiring Company"
+        return "Hiring Company / Recruiter"
 
     @classmethod
     def parse(cls, post_data: Dict[str, Any], skills_taxonomy: List[str]) -> Dict[str, Any]:
