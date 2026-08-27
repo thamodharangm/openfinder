@@ -53,16 +53,18 @@ def health_check():
 # 🟢 CLAUDE WEB CUSTOM CONNECTOR (MCP PROTOCOL)
 # ==========================================
 
+from fastapi.responses import JSONResponse, Response
+
 @app.get("/.well-known/oauth-authorization-server", tags=["Claude"])
 @app.get("/.well-known/oauth-protected-resource", tags=["Claude"])
 def oauth_discovery():
-    # Signal to Claude that no OAuth login wall is required
-    return {"token_endpoint": None, "authorization_endpoint": None}
+    # Returning 404 explicitly tells Claude: 'No OAuth required, connect with No-Auth'
+    return Response(status_code=404)
 
 
 @app.post("/register", tags=["Claude"])
 def dynamic_client_register():
-    return {"client_id": "openfinder-client", "client_secret": "openfinder-secret"}
+    return Response(status_code=404)
 
 
 @app.post("/", tags=["Claude"])
@@ -77,13 +79,16 @@ async def mcp_jsonrpc_endpoint(request: dict):
 
     # 1. Initialize
     if method == "initialize":
+        client_proto = params.get("protocolVersion", "2024-11-05")
         return {
             "jsonrpc": "2.0",
             "id": req_id,
             "result": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": client_proto,
                 "capabilities": {
-                    "tools": {}
+                    "tools": {
+                        "listChanged": False
+                    }
                 },
                 "serverInfo": {
                     "name": "openfinder",
@@ -94,7 +99,7 @@ async def mcp_jsonrpc_endpoint(request: dict):
 
     # 2. Initialized Notification
     if method == "notifications/initialized":
-        return {"jsonrpc": "2.0", "result": {}}
+        return JSONResponse(content={"jsonrpc": "2.0", "result": {}})
 
     # 3. Ping
     if method == "ping":
