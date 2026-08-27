@@ -27,6 +27,7 @@ from core.resume_parser import ResumeParser
 from core.linkedin_finder import LinkedInFinder
 from core.matcher import JobMatcher
 from core.pitch_generator import OutreachPitchGenerator
+from core.post_extractor import LinkedInPostExtractor
 
 app = FastAPI(
     title="OpenFinder - Universal AI Career Scout & Claude Connector",
@@ -507,6 +508,24 @@ def generate_pitch_endpoint(
         "company": company_name,
         "pitches": pitches
     }
+
+
+@app.get("/api/parse-post", tags=["Post Parser"])
+@app.post("/api/parse-post", tags=["Post Parser"])
+def parse_post_endpoint(
+    post_url: str = Query(..., description="Direct LinkedIn Post URL or shortlink"),
+    candidate_name: str = Query("Candidate", description="Your name for outreach sign-off"),
+    candidate_exp_years: int = Query(2, description="Your years of experience")
+) -> Dict[str, Any]:
+    """
+    Directly extracts structured hiring data (HR email, phone, skills, role)
+    from any LinkedIn recruiter post URL and generates customized outreach pitches.
+    """
+    return LinkedInPostExtractor.extract_from_url(
+        url=post_url,
+        candidate_name=candidate_name,
+        candidate_exp_years=candidate_exp_years
+    )
 
 
 if __name__ == "__main__":

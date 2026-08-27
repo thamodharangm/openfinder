@@ -19,6 +19,7 @@ from core.linkedin_finder import LinkedInFinder
 from core.resume_parser import ResumeParser
 from core.matcher import JobMatcher
 from core.pitch_generator import OutreachPitchGenerator
+from core.post_extractor import LinkedInPostExtractor
 
 
 def main():
@@ -30,18 +31,42 @@ Examples:
   python scout.py "React Developer" "Bangalore"
   python scout.py "Python FastAPI" "Remote" --results 5
   python scout.py --resume my_resume.pdf --location "Chennai"
+  python scout.py --post "https://www.linkedin.com/posts/..."
         """
     )
     parser.add_argument("role", nargs="?", default="Software Engineer", help="Job role / keywords (e.g. 'React Developer', 'Python Django')")
     parser.add_argument("pos_location", nargs="?", default=None, help="Location positional arg (e.g. 'Bangalore', 'Chennai')")
     parser.add_argument("--location", "-l", type=str, default=None, help="Location (e.g. 'Bangalore', 'Chennai', 'Remote', 'India')")
     parser.add_argument("--resume", "-r", type=str, help="Path to candidate resume PDF for instant ATS match analysis")
+    parser.add_argument("--post", "-p", type=str, help="Direct LinkedIn post URL to extract HR email, phone & generate pitch")
     parser.add_argument("--results", "-n", type=int, default=5, help="Number of job posts to fetch (default: 5)")
     parser.add_argument("--remote", action="store_true", help="Filter for remote jobs only")
 
     args = parser.parse_args()
     finder = LinkedInFinder()
     target_location = args.location or args.pos_location or "India"
+
+    # Mode 0: Direct LinkedIn Post URL Extractor
+    if args.post:
+        print("=" * 65)
+        print(f"🔗 Extracting Intelligence from LinkedIn Post...")
+        print("=" * 65)
+        post_data = LinkedInPostExtractor.extract_from_url(args.post)
+        if "error" in post_data:
+            print(f"❌ {post_data['error']}")
+            return
+
+        print(f"• Author: {post_data.get('author')}")
+        print(f"• Role: {post_data.get('job_role')}")
+        print(f"• Location: {post_data.get('location')}")
+        print(f"• Recruiter Emails: {', '.join(post_data.get('recruiter_emails', [])) or 'None found'}")
+        print(f"• Contact Phone: {', '.join(post_data.get('contact_numbers', [])) or 'None found'}")
+        print(f"• Detected Skills: {', '.join(post_data.get('detected_skills', []))}")
+        print("\n✉️ Customized Outreach Pitch:")
+        print(f"\"{post_data.get('tailored_outreach_pitches', {}).get('linkedin_connection_note_300_chars')}\"")
+        print("\n📄 Full Post Content Preview:")
+        print(post_data.get('full_post_content', '')[:300] + "...")
+        return
 
     # Mode 1: Resume Matcher
     if args.resume:

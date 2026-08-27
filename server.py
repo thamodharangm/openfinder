@@ -21,6 +21,7 @@ from core.resume_parser import ResumeParser
 from core.linkedin_finder import LinkedInFinder
 from core.matcher import JobMatcher
 from core.pitch_generator import OutreachPitchGenerator
+from core.post_extractor import LinkedInPostExtractor
 
 # Initialize FastMCP Server
 mcp = FastMCP("OpenFinder - Professional Career Scout")
@@ -179,6 +180,29 @@ def generate_recruiter_pitch(
         "company": company_name,
         "pitches": pitches
     }
+
+
+@mcp.tool()
+def parse_linkedin_post(
+    post_url: str,
+    candidate_name: str = "Candidate",
+    candidate_exp_years: int = 2
+) -> Dict[str, Any]:
+    """
+    Directly extracts structured hiring intelligence from any LinkedIn Post, 
+    Activity Feed update, or Shortlink, extracting HR contact emails, phone numbers,
+    required tech stack, and generating personalized recruiter pitches.
+    
+    Args:
+        post_url: Direct URL to the LinkedIn post (e.g. 'https://www.linkedin.com/posts/...').
+        candidate_name: Your name for the pitch sign-off.
+        candidate_exp_years: Your years of experience.
+    """
+    return LinkedInPostExtractor.extract_from_url(
+        url=post_url,
+        candidate_name=candidate_name,
+        candidate_exp_years=candidate_exp_years
+    )
 
 
 if __name__ == "__main__":
