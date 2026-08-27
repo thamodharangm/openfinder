@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="openfinderlogo.svg" alt="OpenFinder Logo" width="220" />
+</p>
+
 <h1 align="center">🎯 OpenFinder v2.0 - Professional AI Career Suite</h1>
 
 <p align="center">
