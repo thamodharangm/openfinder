@@ -27,22 +27,23 @@ class SearchIntent:
     def generate_dork_queries(self, max_queries: int = 5) -> List[str]:
         """
         Generates precision search engine mirror dorks targeting ONLY site:linkedin.com/posts.
-        Strictly prioritizes exact quoted role phrases.
+        Uses high-recall natural queries and quoted variants for maximum discovery.
         """
         loc_str = f" {self.target_location}" if self.target_location and self.target_location.lower() != "india" else ""
         p_role = self.target_role.replace('"', '').strip()
         
         queries = [
+            f'site:linkedin.com/posts hiring {p_role}{loc_str}'.strip(),
+            f'site:linkedin.com/posts {p_role} hiring{loc_str}'.strip(),
             f'site:linkedin.com/posts "{p_role}" "we are hiring"{loc_str}'.strip(),
-            f'site:linkedin.com/posts "{p_role}" "send resume"{loc_str}'.strip(),
-            f'site:linkedin.com/posts "{p_role}" "job opening"{loc_str}'.strip(),
-            f'site:linkedin.com/posts "{p_role}" hiring{loc_str}'.strip(),
-            f'site:linkedin.com/posts "{p_role}" "urgent hiring"{loc_str}'.strip(),
+            f'site:linkedin.com/posts {p_role} "send resume"{loc_str}'.strip(),
+            f'site:linkedin.com/posts hiring {self.target_location}'.strip() if self.target_location and self.target_location.lower() != "india" else f'site:linkedin.com/posts {p_role} opening',
+            f'site:linkedin.com/posts "{p_role}" hiring'.strip(),
         ]
         
         if self.role_variants and len(self.role_variants) > 1:
             v_role = self.role_variants[1].replace('"', '').strip()
-            queries.insert(1, f'site:linkedin.com/posts "{v_role}" "we are hiring"{loc_str}'.strip())
+            queries.insert(1, f'site:linkedin.com/posts hiring {v_role}{loc_str}'.strip())
 
         seen = set()
         deduped = []
@@ -180,8 +181,11 @@ class SearchIntentParser:
     LOCATION_CLUSTERS: Dict[str, List[str]] = {
         "bangalore": ["Bangalore", "Bengaluru", "Electronic City", "Whitefield", "Koramangala", "Indiranagar", "Hebbal", "HSR Layout", "Marathahalli", "Karnataka"],
         "chennai": ["Chennai", "Madras", "OMR", "Sholinganallur", "Guindy", "T Nagar", "Velachery", "Tamil Nadu"],
+        "coimbatore": ["Coimbatore", "Kovai", "Peelamedu", "Saravanampatti", "Tamil Nadu"],
         "madurai": ["Madurai", "Mattuthavani", "KK Nagar", "Tamil Nadu"],
-        "coimbatore": ["Coimbatore", "Peelamedu", "Saravanampatti", "Tamil Nadu"],
+        "trichy": ["Trichy", "Tiruchirappalli", "Tamil Nadu"],
+        "theni": ["Theni", "Tamil Nadu", "Chennai", "Coimbatore"],
+        "salem": ["Salem", "Tamil Nadu"],
         "hyderabad": ["Hyderabad", "HITEC City", "Gachibowli", "Madhapur", "Secunderabad", "Telangana"],
         "mumbai": ["Mumbai", "Bombay", "Navi Mumbai", "Thane", "Andheri", "Bandra", "Maharashtra"],
         "pune": ["Pune", "Hinjewadi", "Magarpatta", "Viman Nagar", "Kharadi", "Maharashtra"],
