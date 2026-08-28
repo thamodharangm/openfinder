@@ -196,18 +196,17 @@ class LinkedInFinder:
         if not debug:
             cached = self.cache.get(cache_key, timeframe=timeframe)
             if cached is not None and len(cached) > 0:
-                from datetime import datetime, timezone
-                from core.time_utils import format_time_ago, parse_iso_datetime
-                now_utc = datetime.now(timezone.utc)
+                from core.time_utils import calculate_age, parse_timestamp
                 for item in cached:
                     pub_iso = item.get("published_at")
                     if pub_iso:
-                        pub_dt = parse_iso_datetime(pub_iso)
+                        pub_dt = parse_timestamp(soup_or_str=pub_iso)
                         if pub_dt:
-                            diff_sec = max(0.0, (now_utc - pub_dt).total_seconds())
-                            item["age_minutes"] = int(diff_sec / 60)
-                            item["age_hours"] = round(diff_sec / 3600, 1)
-                            item["posted_time"] = format_time_ago(int(diff_sec / 60))
+                            age_res = calculate_age(pub_dt)
+                            if age_res.get("is_valid", True):
+                                item["age_minutes"] = age_res.get("age_minutes", item.get("age_minutes", 0))
+                                item["age_hours"] = age_res.get("age_hours", item.get("age_hours", 0))
+                                item["posted_time"] = age_res.get("age_text", item.get("posted_time", "Recently"))
                 return cached
 
         # 1. Primary: Authenticated LinkedIn Session Search (Posts Tab)
@@ -405,18 +404,17 @@ class LinkedInFinder:
         if not debug:
             cached = self.cache.get(cache_key, timeframe=date_posted)
             if cached is not None and len(cached) > 0:
-                from datetime import datetime, timezone
-                from core.time_utils import format_time_ago, parse_iso_datetime
-                now_utc = datetime.now(timezone.utc)
+                from core.time_utils import calculate_age, parse_timestamp
                 for item in cached:
                     pub_iso = item.get("published_at")
                     if pub_iso:
-                        pub_dt = parse_iso_datetime(pub_iso)
+                        pub_dt = parse_timestamp(soup_or_str=pub_iso)
                         if pub_dt:
-                            diff_sec = max(0.0, (now_utc - pub_dt).total_seconds())
-                            item["age_minutes"] = int(diff_sec / 60)
-                            item["age_hours"] = round(diff_sec / 3600, 1)
-                            item["posted_time"] = format_time_ago(int(diff_sec / 60))
+                            age_res = calculate_age(pub_dt)
+                            if age_res.get("is_valid", True):
+                                item["age_minutes"] = age_res.get("age_minutes", item.get("age_minutes", 0))
+                                item["age_hours"] = age_res.get("age_hours", item.get("age_hours", 0))
+                                item["posted_time"] = age_res.get("age_text", item.get("posted_time", "Recently"))
                 return cached
 
         session_results = await LinkedInSessionSearch.search_posts_internal_async(

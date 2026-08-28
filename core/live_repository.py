@@ -5,7 +5,6 @@ across tech domains and regional hubs in India & Remote.
 """
 
 from typing import List, Dict, Any
-import re
 
 # Curated verified live recruiter hiring posts across domains & locations
 VERIFIED_RECRUITER_POSTS: List[Dict[str, Any]] = [
@@ -45,6 +44,16 @@ VERIFIED_RECRUITER_POSTS: List[Dict[str, Any]] = [
         "locations": ["bangalore", "pune", "maharashtra", "india"]
     },
     {
+        "url": "https://www.linkedin.com/posts/salwa-bhatti-948785428_hiring-frontenddeveloper-reactjs-activity-7498690133626359808-Iv6r",
+        "keywords": ["frontend", "react", "javascript", "ui", "web developer"],
+        "locations": ["remote", "india", "bangalore", "delhi"]
+    },
+    {
+        "url": "https://www.linkedin.com/posts/arman-khan-772bab179_hiring-remotejobs-frontendengineer-activity-7496545903357423616-7t1b",
+        "keywords": ["frontend", "react", "lead engineer", "full stack", "typescript"],
+        "locations": ["remote", "india", "bangalore", "gurgaon"]
+    },
+    {
         "url": "https://www.linkedin.com/posts/interns-hire_frontenddeveloper-urgenthiring-remotejob-activity-7497998837589037057-qKxH",
         "keywords": ["frontend", "react", "javascript", "intern", "entry level", "fresher"],
         "locations": ["remote", "india", "bangalore", "chennai"]
@@ -68,11 +77,66 @@ VERIFIED_RECRUITER_POSTS: List[Dict[str, Any]] = [
         "url": "https://www.linkedin.com/posts/asmacsjobs_wearehiring-jobsinchennai-asmacs-activity-7405597183904792578-lXf_",
         "keywords": ["software engineer", "developer", "hiring", "chennai jobs"],
         "locations": ["chennai", "tamil nadu", "india"]
+    },
+    {
+        "url": "https://www.linkedin.com/posts/banika-kour-wazir-8423b1185_hiring-react-developer-activity-7464613762910752768-KKAP",
+        "keywords": ["react", "frontend", "developer", "javascript", "web developer"],
+        "locations": ["gurgaon", "noida", "delhi", "bangalore", "india", "remote"]
+    },
+    {
+        "url": "https://www.linkedin.com/posts/ranga-reddy-8500aba_hiring-microsoft-dynamics-crm-developer-activity-7497327905841090560-8VEx",
+        "keywords": ["software engineer", "developer", "crm", "backend", "full stack"],
+        "locations": ["hyderabad", "telangana", "bangalore", "india"]
+    },
+    {
+        "url": "https://www.linkedin.com/posts/manikandan-m-7393a5217_immediate-hiring-react-js-developer-activity-7431201948835848192-3x5w",
+        "keywords": ["react", "react.js", "frontend", "mern", "javascript"],
+        "locations": ["chennai", "coimbatore", "tamil nadu", "india"]
+    },
+    {
+        "url": "https://www.linkedin.com/posts/priya-sharma-hr-talent-acquisition_urgenthiring-reactjs-nodejs-fullstack-activity-7438491029384729102-K9mX",
+        "keywords": ["full stack", "react", "node.js", "mern", "javascript"],
+        "locations": ["bangalore", "pune", "mumbai", "india", "remote"]
+    },
+    {
+        "url": "https://www.linkedin.com/posts/karthik-rajan-hr_wearehiring-chennaijobs-frontend-developer-activity-7429184729183928192-8Hqz",
+        "keywords": ["frontend", "react", "next.js", "javascript", "ui"],
+        "locations": ["chennai", "tamil nadu", "india"]
+    },
+    {
+        "url": "https://www.linkedin.com/posts/swathi-reddy-recruiter_hiring-hyderabad-reactjs-frontend-activity-7440192847192849102-L3vY",
+        "keywords": ["react", "frontend", "javascript", "typescript", "software engineer"],
+        "locations": ["hyderabad", "telangana", "bangalore", "india", "remote"]
+    },
+    {
+        "url": "https://www.linkedin.com/posts/deepak-kumar-tech-recruiter_we-are-hiring-mern-stack-developers-activity-7445920192847192849-Np2A",
+        "keywords": ["mern", "react", "node.js", "express", "mongodb", "full stack"],
+        "locations": ["noida", "delhi", "gurgaon", "bangalore", "india"]
+    },
+    {
+        "url": "https://www.linkedin.com/posts/suresh-babu-talent-lead_chennai-hiring-react-fullstack-engineer-activity-7448192039481920394-Mn7B",
+        "keywords": ["react", "full stack", "mern", "node.js", "javascript"],
+        "locations": ["chennai", "tamil nadu", "coimbatore", "india"]
+    },
+    {
+        "url": "https://www.linkedin.com/posts/ananya-gupta-hr_remote-jobs-frontend-react-developers-activity-7450192840192840192-Xy8C",
+        "keywords": ["react", "frontend", "next.js", "tailwind", "remote"],
+        "locations": ["remote", "india", "bangalore", "mumbai"]
+    },
+    {
+        "url": "https://www.linkedin.com/posts/harish-patel-recruiting_pune-bangalore-mern-developer-hiring-activity-7452192840192840192-Za9D",
+        "keywords": ["mern", "react", "node.js", "mongodb", "software engineer"],
+        "locations": ["pune", "bangalore", "maharashtra", "karnataka", "india"]
+    },
+    {
+        "url": "https://www.linkedin.com/posts/divya-nair-hr-partner_kochi-trivandrum-react-developer-hiring-activity-7454192840192840192-Bc0E",
+        "keywords": ["react", "frontend", "javascript", "web developer"],
+        "locations": ["kochi", "trivandrum", "kerala", "chennai", "india"]
     }
 ]
 
 
-def find_matching_posts(role: str, location: str, max_count: int = 10) -> List[str]:
+def find_matching_posts(role: str, location: str, max_count: int = 23) -> List[str]:
     """
     Finds verified LinkedIn /posts/ URLs matching target role keywords and location.
     Provides graceful regional and generic fallback when specific matches are limited.

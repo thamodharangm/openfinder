@@ -304,7 +304,7 @@ async def mcp_message_handler(request: Request):
                                 "max_results": {
                                     "type": "integer",
                                     "description": "Max number of posts to fetch",
-                                    "default": 10
+                                    "default": 23
                                 }
                             },
                             "required": ["keywords"]
@@ -370,7 +370,7 @@ async def mcp_message_handler(request: Request):
                                 "max_results": {
                                     "type": "integer",
                                     "description": "Max results to fetch",
-                                    "default": 10
+                                    "default": 23
                                 }
                             },
                             "required": ["keywords"]
@@ -385,7 +385,7 @@ async def mcp_message_handler(request: Request):
                                 "query": { "type": "string", "description": "Job role or technical skills (e.g. 'React Developer', 'Python FastAPI')", "default": "React Developer" },
                                 "location": { "type": "string", "description": "City or Region (e.g. 'Bangalore', 'Remote', 'India')", "default": "India" },
                                 "timeframe": { "type": "string", "description": "Freshness window ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d')", "default": "past-24h" },
-                                "max_results": { "type": "integer", "description": "Max opportunities (1-30)", "default": 10 },
+                                "max_results": { "type": "integer", "description": "Max opportunities (1-30)", "default": 23 },
                                 "remote_only": { "type": "boolean", "description": "Filter for remote positions only", "default": False },
                                 "candidate_profile_id": { "type": "string", "description": "Optional stored candidate profile ID for ATS skill & experience matching" },
                                 "candidate_skills": { "type": "string", "description": "Comma-separated technical skills (e.g. 'React, Node.js, Express, MongoDB')" },
@@ -470,7 +470,7 @@ async def mcp_message_handler(request: Request):
         elif tool_name == "search_posts":
             keywords = args.get("keywords", "React Developer hiring")
             date_posted = args.get("date_posted", "past-24h")
-            max_results = args.get("max_results", 10)
+            max_results = args.get("max_results", 23)
 
             posts = await asyncio.to_thread(
                 linkedin_finder.search_posts,
@@ -529,7 +529,7 @@ async def mcp_message_handler(request: Request):
             keywords = args.get("keywords", "React Developer")
             location = args.get("location", "India")
             timeframe = args.get("timeframe", "past-24h")
-            max_results = args.get("max_results", 10)
+            max_results = args.get("max_results", 23)
             logger.info(f"🔍 [MCP search_hiring_posts] query='{keywords}', location='{location}', timeframe='{timeframe}', max={max_results}")
             res = await service.search_opportunities_async(
                 query=keywords,
@@ -686,7 +686,7 @@ async def search_opportunities_endpoint(
     query: str = Query("React Developer", description="Role or tech stack (e.g. 'React Developer', 'Python FastAPI')"),
     location: str = Query("India", description="Target city/location (e.g. 'Bangalore', 'Remote', 'India')"),
     timeframe: str = Query("past-24h", description="Freshness window ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d')"),
-    max_results: int = Query(10, description="Max opportunities (1-30)"),
+    max_results: int = Query(23, description="Max opportunities (1-30)"),
     remote_only: bool = Query(False, description="Filter for remote roles"),
     candidate_profile_id: Optional[str] = Query(None, description="Optional candidate profile ID for ATS skill & experience fit"),
     candidate_skills: Optional[str] = Query(None, description="Comma-separated candidate skills for instant ATS matching (e.g. 'React, Node.js, Express, MongoDB')"),
