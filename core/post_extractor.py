@@ -241,8 +241,19 @@ class LinkedInPostExtractor:
         full_text = og_desc.get("content", "").strip() if og_desc else soup.get_text(" ", strip=True)
 
         author = "Hiring Manager / Recruiter"
-        if "|" in title_str:
-            author = title_str.split("|")[-1].strip()
+        m_auth = re.search(r"^([^:|]+?)\s+on\s+LinkedIn", title_str, re.IGNORECASE)
+        if m_auth:
+            clean_a = m_auth.group(1).strip()
+            if len(clean_a) > 2 and not any(x in clean_a.lower() for x in ["comment", "like", "post", "share", "reaction"]):
+                author = clean_a.title()
+        elif "|" in title_str:
+            parts = [p.strip() for p in title_str.split("|") if p.strip()]
+            for p in parts:
+                if not re.search(r"\d+\s*(?:comment|like|reaction|repost)", p, re.IGNORECASE):
+                    sub_m = re.search(r"^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)", p)
+                    if sub_m:
+                        author = sub_m.group(1).strip()
+                        break
 
         # 3. Hiring Intent Classification & Spam Filter
         intent_res = HiringIntentClassifier.classify(

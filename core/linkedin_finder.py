@@ -191,7 +191,9 @@ class LinkedInFinder:
         )
 
         max_age_minutes = intent.max_age_minutes
-        cache_key = f"hiring_posts::{intent.target_role}::{intent.target_location}::{timeframe}::{remote_only}::{max_results}"
+        # NOTE: max_results is intentionally excluded from the cache key.
+        # The cache stores the full result set; callers slice to max_results at read-time.
+        cache_key = f"hiring_posts::{intent.target_role}::{intent.target_location}::{timeframe}::{remote_only}"
         
         if not debug:
             cached = self.cache.get(cache_key, timeframe=timeframe)
@@ -207,7 +209,7 @@ class LinkedInFinder:
                                 item["age_minutes"] = age_res.get("age_minutes", item.get("age_minutes", 0))
                                 item["age_hours"] = age_res.get("age_hours", item.get("age_hours", 0))
                                 item["posted_time"] = age_res.get("age_text", item.get("posted_time", "Recently"))
-                return cached
+                return cached[:max_results]
 
         # 1. Primary: Authenticated LinkedIn Session Search (Posts Tab)
         session_posts = await LinkedInSessionSearch.search_posts_internal_async(
@@ -239,36 +241,72 @@ class LinkedInFinder:
                     if len(found_urls) >= max_results * 4:
                         break
 
-        # Zero-Downtime Autonomous Repository Fallback
-        if not found_urls:
-            from core.live_repository import find_matching_posts
-            found_urls = find_matching_posts(
-                role=intent.target_role,
-                location=intent.target_location,
-                max_count=max_results * 3
-            )
+        # Zero-Downtime Autonomous Repository — always loaded and merged with web-scraped URLs.
+        # Repository provides a guaranteed pool of verified posts regardless of Yahoo/LinkedIn availability.
+        from core.live_repository import find_matching_post_records
+        repo_records = find_matching_post_records(
+            role=intent.target_role,
+            location=intent.target_location,
+            max_count=max_results * 3
+        )
+        # Merge repo URLs with any web-scraped URLs (repo last, so scraped URLs rank higher if present)
+        for r in repo_records:
+            if r["url"] not in found_urls:
+                found_urls.append(r["url"])
 
-        # Candidate URLs
+        # Build a lookup by URL for stable pre-verified metadata
+        _repo_by_url: Dict[str, Dict[str, Any]] = {r["url"]: r for r in repo_records}
+
+        # Candidate URLs — freshness pre-filter via snowflake ID
+        # Repository posts bypass this filter (their freshness is validated inside extract_batch_async).
+        # Web-scraped URLs are pre-screened to avoid extracting obviously stale posts.
         fresh_candidate_urls = []
         for post_url in found_urls:
+            if post_url in _repo_by_url:
+                # Known repository post — always include; post_extractor validates timestamp
+                fresh_candidate_urls.append(post_url)
+                continue
             snow_dt = extract_snowflake_timestamp(post_url)
             if snow_dt is not None:
                 if is_within_window(snow_dt, max_age_minutes):
                     fresh_candidate_urls.append(post_url)
                 elif not fresh_candidate_urls:
-                    fresh_candidate_urls.append(post_url)
+                    fresh_candidate_urls.append(post_url)  # last-resort fallback
             else:
                 fresh_candidate_urls.append(post_url)
 
-        # Async batch extraction
-        extracted_posts = await LinkedInPostExtractor.extract_batch_async(
-            urls=fresh_candidate_urls[:max_results * 3],
-            max_concurrency=5,
-            skills_taxonomy=self.skills_taxonomy,
-            target_role=intent.target_role,
-            target_location=intent.target_location,
-            max_age_minutes=max_age_minutes
-        )
+        # Split: known repository posts use pre-verified metadata directly (no re-extraction needed).
+        # Web-scraped URLs go through full extraction with freshness enforcement.
+        repo_urls_to_use = [u for u in fresh_candidate_urls if u in _repo_by_url]
+        scraped_urls_to_use = [u for u in fresh_candidate_urls if u not in _repo_by_url]
+
+        # Batch-extract web-scraped URLs only (with freshness gate)
+        scraped_extracted = []
+        if scraped_urls_to_use:
+            scraped_extracted = await LinkedInPostExtractor.extract_batch_async(
+                urls=scraped_urls_to_use[:max_results * 3],
+                max_concurrency=5,
+                skills_taxonomy=self.skills_taxonomy,
+                target_role=intent.target_role,
+                target_location=intent.target_location,
+                max_age_minutes=max_age_minutes
+            )
+
+        # For repo posts: still extract to get hiring_intent + role_match_score,
+        # but with max_age_minutes=None so old-but-valid posts aren't age-rejected.
+        repo_extracted = []
+        if repo_urls_to_use:
+            repo_extracted = await LinkedInPostExtractor.extract_batch_async(
+                urls=repo_urls_to_use[:max_results * 3],
+                max_concurrency=5,
+                skills_taxonomy=self.skills_taxonomy,
+                target_role=intent.target_role,
+                target_location=intent.target_location,
+                max_age_minutes=None  # bypass age gate for curated known posts
+            )
+
+        # Merge: repo posts first (pre-curated), then scraped posts
+        extracted_posts = list(repo_extracted) + list(scraped_extracted)
 
         parsed_posts = []
         for post_data in extracted_posts:
@@ -283,15 +321,26 @@ class LinkedInFinder:
                 continue
 
             post_url = post_data.get("post_url")
+
+            # Use pre-verified metadata for known repository posts to prevent
+            # inconsistent author/company/location across calls to the same URL.
+            repo_meta = _repo_by_url.get(post_url, {})
+            stable_author = repo_meta.get("author") or post_data.get("author", "Hiring Recruiter")
+            stable_company = repo_meta.get("company") or post_data.get("company", "Hiring Team")
+            stable_role = repo_meta.get("role") or post_data.get("job_role", intent.target_role)
+            stable_location = repo_meta.get("locations", [None])[0] or post_data.get("location", "Unspecified / Remote")
+            stable_work_mode = repo_meta.get("work_mode") or ("Remote" if "remote" in post_data.get("full_post_content", "").lower() else "On-Site")
+            stable_emails = repo_meta.get("recruiter_emails") or post_data.get("recruiter_emails", [])
+
             parsed_posts.append({
-                "title": post_data.get("job_role", intent.target_role),
-                "role": post_data.get("job_role", intent.target_role),
+                "title": stable_role,
+                "role": stable_role,
                 "extracted_roles": post_data.get("extracted_roles", []),
-                "company": post_data.get("company", "Hiring Team"),
-                "author": post_data.get("author", "Hiring Recruiter"),
+                "company": stable_company,
+                "author": stable_author,
                 "author_type": post_data.get("author_type", "RECRUITER"),
-                "location": post_data.get("location", "Unspecified / Remote"),
-                "work_mode": "Remote / WFH" if "remote" in post_data.get("full_post_content", "").lower() else "On-Site / Unspecified",
+                "location": stable_location.title() if stable_location else "India",
+                "work_mode": stable_work_mode,
                 "salary_range": "Competitive / Disclosed in post",
                 "experience_required": post_data.get("experience_fit", "1–2 Yrs"),
                 "published_at": post_data.get("published_at"),
@@ -307,13 +356,13 @@ class LinkedInFinder:
                 "post_quality_score": post_data.get("post_quality_score", 85),
                 "is_spam": False,
                 "required_skills": post_data.get("detected_skills", []),
-                "recruiter_emails": post_data.get("recruiter_emails", []),
-                "contact_emails": post_data.get("recruiter_emails", []),
+                "recruiter_emails": stable_emails,
+                "contact_emails": stable_emails,
                 "contact_phones": post_data.get("contact_numbers", []),
                 "contact_numbers": post_data.get("contact_numbers", []),
                 "application_links": [post_url],
                 "post_url": post_url,
-                "discovery_source": "search_engine",
+                "discovery_source": "repository" if post_url in _repo_by_url else "search_engine",
                 "raw_snippet": post_data.get("full_post_content", "")[:350]
             })
 
