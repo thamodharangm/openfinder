@@ -430,8 +430,8 @@ async def mcp_message_handler(request: Request):
     elif method == "tools/call":
         tool_name = params.get("name")
         args = params.get("arguments", {})
-        try:
-            if tool_name == "search_opportunities":
+
+        if tool_name == "search_opportunities":
             query = args.get("query", "React Developer")
             location = args.get("location", "India")
             timeframe = args.get("timeframe", "past-24h")
@@ -603,21 +603,6 @@ async def mcp_message_handler(request: Request):
                         {
                             "type": "text",
                             "text": json.dumps({"status": "success", "pitches": pitches}, indent=2)
-                        }
-                    ]
-                }
-            }
-        except Exception as tool_err:
-            import traceback
-            logger.error(f"❌ [MCP Tool Error] in '{tool_name}': {traceback.format_exc()}")
-            response_payload = {
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": json.dumps({"status": "error", "reason": "TOOL_ERROR", "error": str(tool_err)}, indent=2)
                         }
                     ]
                 }
