@@ -86,27 +86,16 @@ class JobMatcher:
         posts: List[Dict[str, Any]], 
         min_score: int = 35
     ) -> List[Dict[str, Any]]:
-        """Scores and ranks all posts with deep multidimensional analysis."""
-        cand_skills = candidate_profile.get("top_skills", [])
-        cand_exp = candidate_profile.get("years_of_experience", 2)
-        if isinstance(cand_exp, str):
-            cand_exp = 2
+        """Scores and ranks all posts with deep multidimensional analysis using OpportunityRanker."""
+        from core.ranking import OpportunityRanker
+        ranked = OpportunityRanker.rank_opportunities(
+            posts=posts,
+            candidate_profile=candidate_profile,
+            apply_diversity=True
+        )
+        # Ensure match_score is populated for backward compatibility
+        for p in ranked:
+            if "match_score" not in p and p.get("candidate_match_score") is not None:
+                p["match_score"] = p["candidate_match_score"]
 
-        ranked = []
-        for p in posts:
-            req_skills = p.get("required_skills", [])
-            exp_str = p.get("experience_required", "1-3 Years")
-
-            match_data = cls.calculate_weighted_match(
-                candidate_skills=cand_skills,
-                candidate_exp_years=cand_exp,
-                required_skills=req_skills,
-                experience_required_str=exp_str
-            )
-
-            if match_data["match_score"] >= min_score:
-                enriched = {**p, **match_data}
-                ranked.append(enriched)
-
-        ranked.sort(key=lambda x: x["match_score"], reverse=True)
-        return ranked
+        return [p for p in ranked if (p.get("candidate_match_score") or p.get("final_rank_score", 0)) >= min_score]

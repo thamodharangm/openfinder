@@ -316,9 +316,16 @@ class LinkedInSessionSearch:
             }
             results.append(compact_item)
 
-        # Deterministic sort by post_quality_score
-        results.sort(key=lambda x: x.get("post_quality_score", 0), reverse=True)
-        final_results = results[:max_results]
+        # Multi-signal Opportunity Ranking & Deterministic Tie-Breakers
+        from core.ranking import OpportunityRanker
+        ranked_results = OpportunityRanker.rank_opportunities(
+            posts=results,
+            target_role=intent.target_role,
+            target_location=intent.target_location,
+            max_age_minutes=max_age_minutes,
+            apply_diversity=True
+        )
+        final_results = ranked_results[:max_results]
 
         t_rank_end = time.perf_counter()
         metrics["timing_ms"]["ranking_time_ms"] = int((t_rank_end - t_rank_start) * 1000)

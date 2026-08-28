@@ -293,8 +293,15 @@ class LinkedInFinder:
                 "raw_snippet": post_data.get("full_post_content", "")[:350]
             })
 
-        parsed_posts.sort(key=lambda x: x.get("post_quality_score", 0), reverse=True)
-        final_posts = parsed_posts[:max_results]
+        from core.ranking import OpportunityRanker
+        ranked_posts = OpportunityRanker.rank_opportunities(
+            posts=parsed_posts,
+            target_role=intent.target_role,
+            target_location=intent.target_location,
+            max_age_minutes=max_age_minutes,
+            apply_diversity=True
+        )
+        final_posts = ranked_posts[:max_results]
 
         if final_posts:
             self.cache.set(cache_key, final_posts, timeframe=timeframe)
