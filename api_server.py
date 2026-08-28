@@ -430,8 +430,8 @@ async def mcp_message_handler(request: Request):
     elif method == "tools/call":
         tool_name = params.get("name")
         args = params.get("arguments", {})
-
-        if tool_name == "search_opportunities":
+        try:
+            if tool_name == "search_opportunities":
             query = args.get("query", "React Developer")
             location = args.get("location", "India")
             timeframe = args.get("timeframe", "past-24h")
@@ -607,18 +607,55 @@ async def mcp_message_handler(request: Request):
                     ]
                 }
             }
+        except Exception as tool_err:
+            import traceback
+            logger.error(f"❌ [MCP Tool Error] in '{tool_name}': {traceback.format_exc()}")
+            response_payload = {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps({"status": "error", "reason": "TOOL_ERROR", "error": str(tool_err)}, indent=2)
+                        }
+                    ]
+                }
+            }
 
-    if response_payload:
-        # Check if session_id query param exists for SSE routing
+    try:
+        if response_payload:
+            # Check if session_id query param exists for SSE routing
+            session_id = request.query_params.get("session_id")
+            if session_id and session_id in sessions:
+                await sessions[session_id].put(response_payload)
+                return Response(status_code=202)
+            return JSONResponse(content=response_payload)
+
+        return JSONResponse(
+            content={"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": f"Method '{method}' not found"}}
+        )
+    except Exception as exc:
+        import traceback
+        err_trace = traceback.format_exc()
+        logger.error(f"❌ [MCP Error] Exception during '{method}': {err_trace}")
+        error_resp = {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps({"status": "error", "reason": "EXECUTION_EXCEPTION", "error": str(exc)}, indent=2)
+                    }
+                ]
+            }
+        }
         session_id = request.query_params.get("session_id")
         if session_id and session_id in sessions:
-            await sessions[session_id].put(response_payload)
+            await sessions[session_id].put(error_resp)
             return Response(status_code=202)
-        return JSONResponse(content=response_payload)
-
-    return JSONResponse(
-        content={"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": f"Method '{method}' not found"}}
-    )
+        return JSONResponse(content=error_resp)
 
 
 # ==========================================================
