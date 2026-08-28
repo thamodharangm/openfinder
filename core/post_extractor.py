@@ -142,8 +142,29 @@ class LinkedInPostExtractor:
         return None
 
     # =========================================================
-    # 3. Check post age
+    # 3. Check post age & recency helpers
     # =========================================================
+    @staticmethod
+    def is_within_last_hour(published_at: datetime) -> bool:
+        now = datetime.now(timezone.utc)
+        age = now - published_at
+        return timedelta(0) <= age < timedelta(hours=1)
+
+    @staticmethod
+    def get_post_age_minutes(published_at: datetime) -> Dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        age = now - published_at
+        total_minutes = int(age.total_seconds() // 60)
+        hours = total_minutes // 60
+        minutes = total_minutes % 60
+        return {
+            "hours": hours,
+            "minutes": minutes,
+            "total_minutes": total_minutes,
+            "age_text": f"{hours}h {minutes}m ago" if hours > 0 else f"{minutes}m ago",
+            "is_within_last_hour": timedelta(0) <= age < timedelta(hours=1)
+        }
+
     @staticmethod
     def get_post_age(published_at: datetime, max_age_hours: Optional[int] = None) -> Optional[Dict[str, Any]]:
         now = datetime.now(timezone.utc)
@@ -172,6 +193,8 @@ class LinkedInPostExtractor:
         return {
             "age_hours": hours,
             "age_minutes": minutes,
+            "total_minutes": total_minutes,
+            "is_within_last_hour": timedelta(0) <= age < timedelta(hours=1),
             "age_text": age_text,
             "published_at_utc": published_at.isoformat(),
         }
