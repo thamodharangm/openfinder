@@ -217,15 +217,56 @@ class OpenFinderService:
             timeframe = "past-24h"
             max_age_min = 1440
 
-        # Execute discovery and extraction
-        raw_posts = await self.finder.search_hiring_posts_async(
-            keywords=clean_query,
-            location=clean_location,
-            timeframe=timeframe,
-            remote_only=remote_only,
-            max_results=bounded_max_results,
-            debug=debug
-        )
+        # Smart Query Expansion: Generate 3-5 role synonyms for high-recall discovery
+        q_lower = clean_query.lower()
+        expanded_keywords = [clean_query]
+        if any(k in q_lower for k in ["react", "frontend", "mern"]):
+            for syn in ["React Developer", "MERN Stack", "Frontend Developer", "React Native"]:
+                if syn.lower() not in [k.lower() for k in expanded_keywords]:
+                    expanded_keywords.append(syn)
+        elif any(k in q_lower for k in ["node", "backend", "express"]):
+            for syn in ["Node.js Developer", "Backend Developer", "MERN Stack", "Full Stack"]:
+                if syn.lower() not in [k.lower() for k in expanded_keywords]:
+                    expanded_keywords.append(syn)
+        elif any(k in q_lower for k in ["python", "fastapi", "django"]):
+            for syn in ["Python Developer", "Backend Engineer", "FastAPI"]:
+                if syn.lower() not in [k.lower() for k in expanded_keywords]:
+                    expanded_keywords.append(syn)
+        elif any(k in q_lower for k in ["full stack", "fullstack", "software engineer"]):
+            for syn in ["Full Stack Developer", "MERN Developer", "Software Engineer"]:
+                if syn.lower() not in [k.lower() for k in expanded_keywords]:
+                    expanded_keywords.append(syn)
+
+        if resolved_profile:
+            t_skills = [s.lower() for s in resolved_profile.get("top_skills", [])]
+            if ("react" in t_skills or "react.js" in t_skills) and "React Developer" not in expanded_keywords:
+                expanded_keywords.append("React Developer")
+            if ("node.js" in t_skills or "express.js" in t_skills) and "Node.js Developer" not in expanded_keywords:
+                expanded_keywords.append("Node.js Developer")
+
+        # Execute concurrent multi-query discovery
+        search_tasks = [
+            self.finder.search_hiring_posts_async(
+                keywords=kw,
+                location=clean_location,
+                timeframe=timeframe,
+                remote_only=remote_only,
+                max_results=bounded_max_results,
+                debug=debug
+            )
+            for kw in expanded_keywords[:4]
+        ]
+        results_lists = await asyncio.gather(*search_tasks, return_exceptions=True)
+
+        seen_urls = set()
+        raw_posts = []
+        for res_list in results_lists:
+            if isinstance(res_list, list):
+                for post in res_list:
+                    u = post.get("post_url")
+                    if u and u not in seen_urls:
+                        seen_urls.add(u)
+                        raw_posts.append(post)
 
         if not raw_posts:
             session_valid = LinkedInSessionSearch.check_session_health().get("valid", False)
@@ -272,6 +313,7 @@ class OpenFinderService:
                 "hiring_intent": p.get("hiring_intent", "HIRING"),
                 "post_quality_score": p.get("post_quality_score", 85),
                 "candidate_match_score": p.get("candidate_match_score"),
+                "match_score": p.get("candidate_match_score") or p.get("final_rank_score") or 85,
                 "final_rank_score": p.get("final_rank_score", p.get("post_quality_score", 85)),
                 "ranking_summary": p.get("ranking_summary", ""),
                 "ranking_reasons": p.get("ranking_reasons", []),

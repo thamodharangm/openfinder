@@ -2,6 +2,29 @@ import re
 from typing import Dict, List, Any
 
 
+def canonicalize_skill(s: str) -> str:
+    sl = s.lower().strip()
+    if sl in ["react", "react.js", "reactjs"]:
+        return "react"
+    if sl in ["node", "node.js", "nodejs"]:
+        return "node.js"
+    if sl in ["express", "express.js", "expressjs"]:
+        return "express"
+    if sl in ["mongo", "mongodb"]:
+        return "mongodb"
+    if sl in ["react native", "reactnative"]:
+        return "react native"
+    if sl in ["next", "next.js", "nextjs"]:
+        return "next.js"
+    if sl in ["js", "javascript", "es6", "es6+"]:
+        return "javascript"
+    if sl in ["tailwind", "tailwindcss", "tailwind css"]:
+        return "tailwind css"
+    if sl in ["rest", "rest api", "restful", "restful apis"]:
+        return "rest api"
+    return sl
+
+
 class JobMatcher:
     """
     Enterprise-Grade Multi-Dimensional Match Engine.
@@ -20,14 +43,19 @@ class JobMatcher:
         experience_required_str: str
     ) -> Dict[str, Any]:
         """Calculates multi-dimensional weighted score and skill gaps."""
-        cand_set = {s.lower() for s in candidate_skills}
-        req_set = {s.lower() for s in required_skills}
+        cand_canon = {canonicalize_skill(s): s for s in candidate_skills}
+        req_canon = {canonicalize_skill(s): s for s in required_skills}
+
+        cand_set = set(cand_canon.keys())
+        req_set = set(req_canon.keys())
 
         # 1. Tech Stack Overlap (Weight: 50%)
         if req_set:
-            matched_skills = cand_set.intersection(req_set)
-            missing_skills = req_set - cand_set
-            tech_score = (len(matched_skills) / len(req_set)) * 100
+            matched_canon = cand_set.intersection(req_set)
+            missing_canon = req_set - cand_set
+            matched_skills = {cand_canon.get(k, req_canon.get(k, k)) for k in matched_canon}
+            missing_skills = {req_canon.get(k, k) for k in missing_canon}
+            tech_score = (len(matched_canon) / len(req_set)) * 100
         else:
             matched_skills = set(candidate_skills[:3])
             missing_skills = set()
