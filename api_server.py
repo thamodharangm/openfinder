@@ -90,8 +90,9 @@ def get_public_base_url(request: Request) -> str:
     return f"{proto}://{host}"
 
 
-@app.get("/.well-known/oauth-authorization-server")
-def oauth_auth_server_discovery(request: Request):
+@app.get("/.well-known/oauth-authorization-server", include_in_schema=False)
+@app.get("/.well-known/openid-configuration", include_in_schema=False)
+def oauth_metadata_discovery(request: Request):
     base_url = get_public_base_url(request)
     return {
         "issuer": base_url,
@@ -99,14 +100,13 @@ def oauth_auth_server_discovery(request: Request):
         "token_endpoint": f"{base_url}/oauth/token",
         "registration_endpoint": f"{base_url}/register",
         "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code", "client_credentials"],
-        "token_endpoint_auth_methods_supported": ["none", "client_secret_post", "client_secret_basic"],
+        "grant_types_supported": ["authorization_code", "client_credentials", "refresh_token"],
+        "token_endpoint_auth_methods_supported": ["none", "client_secret_basic", "client_secret_post"],
         "code_challenge_methods_supported": ["S256", "plain"]
     }
 
 
-@app.get("/.well-known/oauth-protected-resource")
-@app.get("/.well-known/oauth-protected-resource/{path:path}")
+@app.get("/.well-known/oauth-protected-resource", include_in_schema=False)
 def oauth_protected_resource_discovery(request: Request):
     base_url = get_public_base_url(request)
     return {
@@ -115,7 +115,7 @@ def oauth_protected_resource_discovery(request: Request):
     }
 
 
-@app.post("/register")
+@app.post("/register", include_in_schema=False)
 async def dynamic_client_register(request: Request):
     """
     RFC 7591 compliant Dynamic Client Registration for Claude Connectors.
@@ -145,7 +145,7 @@ async def dynamic_client_register(request: Request):
     }
 
 
-@app.api_route("/oauth/authorize", methods=["GET", "POST"])
+@app.api_route("/oauth/authorize", methods=["GET", "POST"], include_in_schema=False)
 async def oauth_authorize(
     request: Request,
     redirect_uri: Optional[str] = None,
@@ -179,7 +179,7 @@ async def oauth_authorize(
     return {"status": "authorized", "code": "openfinder_auth_code"}
 
 
-@app.api_route("/oauth/token", methods=["GET", "POST"])
+@app.api_route("/oauth/token", methods=["GET", "POST"], include_in_schema=False)
 async def oauth_token(request: Request):
     """
     Returns valid bearer & refresh token to Claude Connectors.
@@ -194,8 +194,8 @@ async def oauth_token(request: Request):
     }
 
 
-@app.get("/sse")
-@app.get("/mcp")
+@app.get("/sse", include_in_schema=False)
+@app.get("/mcp", include_in_schema=False)
 async def mcp_sse_endpoint(request: Request):
     """
     Standard MCP SSE Transport for Claude Web Connectors (GET /sse or GET /mcp).
@@ -231,10 +231,10 @@ async def mcp_sse_endpoint(request: Request):
     )
 
 
-@app.post("/sse")
-@app.post("/messages")
-@app.post("/")
-@app.post("/mcp")
+@app.post("/sse", include_in_schema=False)
+@app.post("/messages", include_in_schema=False)
+@app.post("/", include_in_schema=False)
+@app.post("/mcp", include_in_schema=False)
 async def mcp_message_handler(request: Request):
     """
     Handles JSON-RPC 2.0 messages from Claude Connectors (POST /sse, POST /mcp, POST /messages).
@@ -900,6 +900,44 @@ def search_posts_endpoint(
         "markdown_table": table,
         "posts": results
     }
+
+
+# ==========================================================
+# 🟢 CHATGPT ACTIONS STRICT OPENAPI VALIDATION GENERATOR
+# ==========================================================
+from fastapi.openapi.utils import get_openapi
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+        servers=[
+            {"url": "https://openfinder.onrender.com", "description": "Production OpenFinder API Server"}
+        ]
+    )
+
+    def sanitize_schema(node):
+        if isinstance(node, dict):
+            # ChatGPT OpenAPI requirement: Any schema of type 'object' MUST have 'properties'
+            if node.get("type") == "object":
+                if "properties" not in node and "additionalProperties" not in node:
+                    node["properties"] = {}
+            for v in list(node.values()):
+                sanitize_schema(v)
+        elif isinstance(node, list):
+            for item in node:
+                sanitize_schema(item)
+
+    sanitize_schema(schema)
+    app.openapi_schema = schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
 
 
 if __name__ == "__main__":
