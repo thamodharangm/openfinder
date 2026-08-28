@@ -43,7 +43,7 @@ Examples:
     parser.add_argument("--resume", "-r", type=str, help="Path to candidate resume PDF for instant ATS match analysis")
     parser.add_argument("--post", "-p", type=str, help="Direct LinkedIn post URL to extract HR email, phone & generate pitch")
     parser.add_argument("--search-posts", "--sp", type=str, help="Search LinkedIn posts globally (the 'Posts' tab)")
-    parser.add_argument("--date-posted", "-d", type=str, default="past-week", choices=["past-24h", "past-week", "past-month"], help="Recency filter ('past-24h', 'past-week', 'past-month')")
+    parser.add_argument("--date-posted", "-d", type=str, default="past-24h", choices=["past-1h", "past-4h", "past-12h", "past-24h", "past-7d", "past-week", "1h", "4h", "12h", "24h", "7d"], help="Recency filter ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d')")
     parser.add_argument("--results", "-n", type=int, default=5, help="Number of job posts to fetch (default: 5)")
     parser.add_argument("--remote", action="store_true", help="Filter for remote jobs only")
 
@@ -159,10 +159,11 @@ Examples:
         if len(top_skills) >= 2:
             search_kw = f"{top_skills[0]} {top_skills[1]}"
 
-        print(f"\n🔍 Searching Live Matching Recruiter Posts ({search_kw} in {target_location})...")
+        print(f"\n🔍 Searching Live Matching Recruiter Posts ({search_kw} in {target_location}, Filter: {args.date_posted})...")
         posts = finder.search_hiring_posts(
             keywords=search_kw,
             location=target_location,
+            timeframe=args.date_posted,
             remote_only=args.remote,
             max_results=args.results * 2
         )
@@ -182,12 +183,13 @@ Examples:
     # Mode 2: Direct Keyword Search
     else:
         print("=" * 65)
-        print(f"🔍 Searching Live LinkedIn Recruiter Posts: '{args.role}' in '{target_location}'...")
+        print(f"🔍 Searching Live LinkedIn Recruiter Posts: '{args.role}' in '{target_location}' (Filter: {args.date_posted})...")
         print("=" * 65)
 
         posts = finder.search_hiring_posts(
             keywords=args.role,
             location=target_location,
+            timeframe=args.date_posted,
             remote_only=args.remote,
             max_results=args.results
         )

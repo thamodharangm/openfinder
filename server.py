@@ -53,7 +53,7 @@ def parse_resume(pdf_path: str) -> Dict[str, Any]:
 def search_jobs_by_resume(
     resume_path: str,
     location: str = "India",
-    timeframe: str = "w",
+    timeframe: str = "past-24h",
     remote_only: bool = False,
     min_match_score: int = 35
 ) -> Dict[str, Any]:
@@ -64,7 +64,7 @@ def search_jobs_by_resume(
     Args:
         resume_path: Path to candidate resume PDF (e.g. 'D:/my_resume.pdf').
         location: City or Country to search in (e.g. 'Bangalore', 'Remote', 'India').
-        timeframe: 'd' (past 24h), 'w' (past 7 days), 'm' (past month).
+        timeframe: 'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d'.
         remote_only: True if looking only for remote positions.
         min_match_score: Minimum match percentage threshold (default 35%).
     """
@@ -121,12 +121,12 @@ def search_jobs_by_resume(
 def search_linkedin_hiring(
     keywords: str,
     location: str = "India",
-    timeframe: str = "w",
+    timeframe: str = "past-24h",
     remote_only: bool = False,
     max_results: int = 10
 ) -> Dict[str, Any]:
     """
-    Searches recent genuine LinkedIn hiring posts with extracted company names, 
+    Searches recent genuine LinkedIn /posts/ URLs with extracted company names, 
     work mode (Remote/Hybrid/Onsite), salary hints, and apply links.
     
     CRITICAL DISPLAY RULE: Always present results as a clean, horizontal Markdown table with columns:
@@ -136,7 +136,7 @@ def search_linkedin_hiring(
     Args:
         keywords: Job role or skills (e.g. 'React Developer', 'Python Backend').
         location: City or Country (e.g. 'Bangalore', 'Remote', 'India').
-        timeframe: 'd' (24h), 'w' (week), 'm' (month).
+        timeframe: 'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d'.
         remote_only: True to filter only remote roles.
         max_results: Max number of posts (default 10).
     """
@@ -221,11 +221,11 @@ def parse_linkedin_post(
 @mcp.tool()
 def search_posts(
     keywords: str,
-    date_posted: Optional[str] = "past-week",
+    date_posted: Optional[str] = "past-24h",
     max_results: int = 10
 ) -> Dict[str, Any]:
     """
-    Search LinkedIn posts/content globally by keyword (the 'Posts' tab) with an optional recency filter.
+    Search LinkedIn posts globally by keyword (the 'Posts' tab) with an exact freshness filter.
     
     CRITICAL DISPLAY RULE: Always present the search results to the user as a clean, horizontal Markdown table with columns: 
     # | Company | Role | Experience | Location | Posted Time | HR Contact / Email | Direct Link.
@@ -233,7 +233,7 @@ def search_posts(
     
     Args:
         keywords: Search query (e.g. 'React Developer hiring Bangalore', 'looking for MERN developer').
-        date_posted: Recency filter ('past-24h', 'past-week', 'past-month'). Default is 'past-week'.
+        date_posted: Recency filter ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d'). Default is 'past-24h'.
         max_results: Maximum number of posts to fetch (default: 10).
     """
     finder = LinkedInFinder()

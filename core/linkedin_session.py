@@ -12,6 +12,14 @@ load_dotenv()
 
 # Add root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from core.linkedin_urls import is_valid_linkedin_post_url, normalize_linkedin_post_url
+from core.time_utils import (
+    get_max_age_minutes,
+    extract_snowflake_timestamp,
+    is_within_window,
+    calculate_age,
+    FRESHNESS_WINDOWS
+)
 from core.post_extractor import LinkedInPostExtractor
 from config import COMMON_SKILLS
 
@@ -21,7 +29,7 @@ class LinkedInSessionSearch:
     Directly queries LinkedIn's internal 'Posts' Search Tab (/search/results/content/)
     using an authenticated user session cookie (li_at, JSESSIONID).
     
-    Includes global link deduplication and token-optimized compact payloads.
+    Strictly discovers ONLY genuine /posts/ URLs and enforces exact minute-level freshness.
     """
 
     HEADERS = {
@@ -38,13 +46,7 @@ class LinkedInSessionSearch:
         "Upgrade-Insecure-Requests": "1"
     }
 
-    TIME_FILTERS = {
-        "past-24h": "%22past-24h%22",
-        "past-week": "%22past-week%22",
-        "past-month": "%22past-month%22"
-    }
-
-    # In-memory deduplication set across requests
+    # In-memory deduplication set of normalized URLs across requests
     _SEEN_POST_IDS: Set[str] = set()
 
     @classmethod
@@ -67,28 +69,39 @@ class LinkedInSessionSearch:
     def search_posts_internal(
         cls,
         keywords: str,
-        date_posted: str = "past-week",
+        date_posted: str = "past-24h",
         max_results: int = 10,
         skills_taxonomy: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
         """
         Executes internal LinkedIn Posts tab search with authenticated session.
-        Guarantees zero duplicate links and returns token-efficient structured items.
+        Guarantees ONLY /posts/ URLs and enforces exact minute-level freshness window.
         """
         cookies = cls.get_cookies_dict()
         if "li_at" not in cookies:
             return []
 
         skills_taxonomy = skills_taxonomy or COMMON_SKILLS
-        tf = cls.TIME_FILTERS.get(date_posted.lower(), "%22past-week%22")
+        
+        try:
+            max_age_minutes = get_max_age_minutes(date_posted)
+        except ValueError:
+            max_age_minutes = FRESHNESS_WINDOWS["past-24h"]
+
+        # Map to LinkedIn's native query parameter
+        if max_age_minutes <= 1440:  # <= 24h
+            tf_param = "%22past-24h%22"
+        else:
+            tf_param = "%22past-week%22"
+
         encoded_kw = urllib.parse.quote(keywords)
-        url = f"https://www.linkedin.com/search/results/content/?keywords={encoded_kw}&datePosted={tf}&sortBy=%22date_posted%22"
+        url = f"https://www.linkedin.com/search/results/content/?keywords={encoded_kw}&datePosted={tf_param}&sortBy=%22date_posted%22"
 
         headers = dict(cls.HEADERS)
         if "JSESSIONID" in cookies:
             headers["csrf-token"] = cookies["JSESSIONID"].strip('"')
 
-        collected_urls = []
+        discovered_post_urls: List[str] = []
         try:
             with httpx.Client(headers=headers, cookies=cookies, timeout=15.0, follow_redirects=True) as client:
                 resp = client.get(url)
@@ -96,126 +109,70 @@ class LinkedInSessionSearch:
                     return []
 
                 raw_text = resp.text
-                
-                # Extract activity IDs
-                activity_ids = re.findall(r'urn:li:activity:(\d+)', raw_text)
-                for aid in activity_ids:
-                    if aid not in cls._SEEN_POST_IDS:
-                        p_url = f"https://www.linkedin.com/feed/update/urn:li:activity:{aid}/"
-                        if p_url not in collected_urls:
-                            collected_urls.append(p_url)
-
-                # Extract share IDs
-                share_ids = re.findall(r'urn:li:share:(\d+)', raw_text)
-                for sid in share_ids:
-                    if sid not in cls._SEEN_POST_IDS:
-                        p_url = f"https://www.linkedin.com/feed/update/urn:li:share:{sid}/"
-                        if p_url not in collected_urls:
-                            collected_urls.append(p_url)
-
-                # Extract from DOM anchors (excluding corporate /company/ or /jobs/)
                 soup = BeautifulSoup(raw_text, "html.parser")
+
+                # Extract strictly from DOM anchors that match /posts/
                 for a in soup.find_all("a"):
                     href = a.get("href", "")
-                    if ("/posts/" in href or "/feed/update/" in href) and "/jobs/" not in href and "/company/" not in href:
-                        clean = href.split("?")[0].rstrip("/") + "/"
-                        # Check ID
-                        match_id = re.search(r'(?:activity|share)[:-](\d+)', clean)
-                        pid = match_id.group(1) if match_id else clean
-                        if pid not in cls._SEEN_POST_IDS and clean not in collected_urls:
-                            collected_urls.append(clean)
+                    norm_url = normalize_linkedin_post_url(href)
+                    if norm_url:
+                        if norm_url not in cls._SEEN_POST_IDS and norm_url not in discovered_post_urls:
+                            discovered_post_urls.append(norm_url)
+
+                # Also search text for direct https://www.linkedin.com/posts/... patterns
+                regex_posts = re.findall(r'https://[a-zA-Z0-9.-]*linkedin\.com/posts/[a-zA-Z0-9_\-%]+', raw_text)
+                for p in regex_posts:
+                    norm_url = normalize_linkedin_post_url(p)
+                    if norm_url and norm_url not in cls._SEEN_POST_IDS and norm_url not in discovered_post_urls:
+                        discovered_post_urls.append(norm_url)
 
         except Exception as e:
             print(f"LinkedIn session search error: {e}")
             return []
 
         results = []
-        seen_authors_and_roles = set()
-        import time
-        import datetime
 
-        for p_url in collected_urls:
+        for p_url in discovered_post_urls:
             if len(results) >= max_results:
                 break
 
-            # STRICT BAN on corporate job boards /jobs/view/ and non-post links
-            p_lower = p_url.lower()
-            if any(f in p_lower for f in ['/jobs/', '/job/', '/directory/', '/company/', 'jobs/view']):
-                continue
+            # 1. DISCOVERY PRE-FILTER: Snowflake timestamp check
+            snow_dt = extract_snowflake_timestamp(p_url)
+            if snow_dt is not None:
+                if not is_within_window(snow_dt, max_age_minutes):
+                    continue
 
-            # STRICT SNOWFLAKE TIMESTAMP FILTER: Drop any post outside target timeframe
-            ts = cls.get_post_timestamp(p_url)
-            posted_human = "Recently"
-            if ts is not None:
-                age_sec = time.time() - ts
-                dp = date_posted.lower()
-                if "24h" in dp or "day" in dp:
-                    if age_sec > (86400 * 1.15):
-                        continue
-                elif "week" in dp or "1w" in dp:
-                    if age_sec > (7 * 86400 * 1.1):
-                        continue
-                elif "month" in dp or "1m" in dp:
-                    if age_sec > (31 * 86400 * 1.05):
-                        continue
-                
-                # Human readable age
-                dt = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
-                if age_sec < 3600:
-                    posted_human = f"{int(age_sec // 60)} mins ago"
-                elif age_sec < 86400:
-                    posted_human = f"{int(age_sec // 3600)} hrs ago"
-                else:
-                    posted_human = f"{int(age_sec // 86400)} days ago"
-
+            # 2. VERIFICATION FILTER: Full post extraction & authoritative timestamp verification
             post_data = LinkedInPostExtractor.extract_from_url(
                 url=p_url,
-                skills_taxonomy=skills_taxonomy
+                skills_taxonomy=skills_taxonomy,
+                max_age_minutes=max_age_minutes
             )
-            if not post_data or "error" in post_data:
-                continue
 
-            author = post_data.get("author", "").strip()
-            role = post_data.get("job_role", "").strip()
-            dedup_key = f"{author}::{role}".lower()
-
-            # Skip duplicate author + role reposts
-            if dedup_key in seen_authors_and_roles:
+            if not post_data or post_data.get("status") != "success":
                 continue
-            seen_authors_and_roles.add(dedup_key)
 
             # Record post as seen globally
-            match_id = re.search(r'(\d{15,})', p_url)
-            if match_id:
-                cls._SEEN_POST_IDS.add(match_id.group(1))
+            cls._SEEN_POST_IDS.add(p_url)
 
-            # Token-Efficient Compact Output (saves ~70% LLM tokens)
+            # Compact structured output
             pitch_note = post_data.get("tailored_outreach_pitches", {}).get("linkedin_connection_note_300_chars", "")
             
             compact_item = {
-                "role": role,
-                "author": author,
+                "role": post_data.get("job_role", "Software Engineer"),
+                "author": post_data.get("author", "Hiring Recruiter"),
                 "company": post_data.get("company", "Hiring Team"),
                 "location": post_data.get("location", "Unspecified / Remote"),
-                "posted_time": posted_human,
+                "published_at": post_data.get("published_at"),
+                "age_minutes": post_data.get("age_minutes"),
+                "age_hours": post_data.get("age_hours"),
+                "posted_time": post_data.get("age_text", "Recently"),
                 "recruiter_emails": post_data.get("recruiter_emails", []),
                 "contact_phones": post_data.get("contact_numbers", []),
                 "skills": post_data.get("detected_skills", []),
-                "post_url": post_data.get("post_url") or p_url,
+                "post_url": p_url,
                 "connection_pitch": pitch_note
             }
             results.append(compact_item)
 
         return results
-
-    @classmethod
-    def get_post_timestamp(cls, post_url: str) -> Optional[float]:
-        """Extracts exact creation timestamp (in seconds) from LinkedIn snowflake activity/share ID."""
-        match = re.search(r'(?:activity|share)[:-](\d+)', post_url)
-        if match:
-            try:
-                aid = int(match.group(1))
-                return (aid >> 22) / 1000.0
-            except Exception:
-                pass
-        return None

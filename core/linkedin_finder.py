@@ -8,7 +8,15 @@ from pathlib import Path
 
 # Add parent dir to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from config import COMMON_SKILLS, DEFAULT_LOCATION, DEFAULT_TIMEFRAME, DEFAULT_MAX_RESULTS
+from config import COMMON_SKILLS, DEFAULT_LOCATION, DEFAULT_MAX_RESULTS
+from core.linkedin_urls import is_valid_linkedin_post_url, normalize_linkedin_post_url
+from core.time_utils import (
+    get_max_age_minutes,
+    extract_snowflake_timestamp,
+    is_within_window,
+    calculate_age,
+    FRESHNESS_WINDOWS
+)
 from core.spam_filter import is_spam_or_bait
 from core.cache import SearchCache
 from core.post_extractor import LinkedInPostExtractor
@@ -17,9 +25,9 @@ from core.linkedin_session import LinkedInSessionSearch
 
 class LinkedInFinder:
     """
-    Finds real-time genuine LinkedIn recruiter & founder hiring posts (strictly /posts/ & /feed/update/).
-    Completely rejects and filters out any generic corporate job board listings (/jobs/view/).
-    Extracts author, HR contact emails, phone numbers, and required tech stack.
+    Finds real-time genuine LinkedIn recruiter & founder hiring posts (STRICTLY /posts/ URLs only).
+    Completely rejects any corporate job board listings (/jobs/view/) or feed links.
+    Enforces exact minute-level publication freshness.
     """
 
     def __init__(self, skills_taxonomy: Optional[List[str]] = None):
@@ -34,28 +42,9 @@ class LinkedInFinder:
     @staticmethod
     def is_valid_recruiter_post_url(url: str) -> bool:
         """
-        STRICT VALIDATION: Ensures URL is ONLY a personal recruiter/founder post or activity feed update.
-        Completely rejects any /jobs/ or /jobs/view/ links.
+        STRICT VALIDATION: Ensures URL is ONLY a genuine LinkedIn /posts/ URL.
         """
-        if not url:
-            return False
-        url_lower = url.lower()
-
-        # Reject non-LinkedIn
-        if "linkedin.com" not in url_lower and "lnkd.in" not in url_lower:
-            return False
-
-        # Strictly BAN any job aggregator / corporate board links (/jobs/, /jobs/view/, etc.)
-        forbidden_patterns = [
-            '/jobs/', '/job/', '/jobs/view', 'jobs/view', '/directory/', 
-            '/salary/', '/school/', '/learning/', '/pulse/', '/company/',
-            'linkedin.com/jobs', 'in.linkedin.com/jobs'
-        ]
-        if any(forbidden in url_lower for forbidden in forbidden_patterns):
-            return False
-
-        # Strictly require genuine personal/company social post paths
-        return bool('/posts/' in url_lower or '/feed/update/' in url_lower or 'activity-' in url_lower or 'lnkd.in/p/' in url_lower)
+        return is_valid_linkedin_post_url(url)
 
     @staticmethod
     def format_as_markdown_table(posts: List[Dict[str, Any]]) -> str:
@@ -76,12 +65,12 @@ class LinkedInFinder:
 
         for idx, p in enumerate(posts, 1):
             company = str(p.get("company") or "Hiring Team").replace("|", "-").strip()
-            role = str(p.get("role") or p.get("job_role") or "Developer").replace("|", "-").strip()
+            role = str(p.get("role") or p.get("job_role") or p.get("title") or "Developer").replace("|", "-").strip()
             exp = str(p.get("experience_required") or p.get("experience") or "1–2 Yrs").replace("|", "-").strip()
             loc = str(p.get("location") or "Unspecified / Remote").replace("|", "-").strip()
-            posted = str(p.get("posted_time") or "Recently").replace("|", "-").strip()
+            posted = str(p.get("posted_time") or p.get("age_text") or "Recently").replace("|", "-").strip()
 
-            emails = p.get("recruiter_emails") or []
+            emails = p.get("recruiter_emails") or p.get("contact_emails") or []
             phones = p.get("contact_phones") or p.get("contact_numbers") or []
             contacts = []
             if emails:
@@ -97,19 +86,22 @@ class LinkedInFinder:
 
         return "\n".join(lines)
 
-    def clean_linkedin_url(self, raw_url: str) -> str:
+    def clean_linkedin_url(self, raw_url: str) -> Optional[str]:
         """
-        Decodes redirect wrappers into clean LinkedIn post URLs.
+        Decodes redirect wrappers and normalizes into a clean LinkedIn /posts/ URL.
+        Returns None if not a valid /posts/ URL.
         """
         if not raw_url:
-            return ""
+            return None
 
+        # Decode Yahoo / Bing redirect wrappers
+        decoded_url = raw_url
         if "RU=" in raw_url:
             match = re.search(r'RU=([^/&]+)', raw_url)
             if match:
-                return urllib.parse.unquote(match.group(1))
+                decoded_url = urllib.parse.unquote(match.group(1))
 
-        if "bing.com/ck/" in raw_url or "u=a1" in raw_url:
+        elif "bing.com/ck/" in raw_url or "u=a1" in raw_url:
             try:
                 parsed_q = urllib.parse.parse_qs(urllib.parse.urlparse(raw_url).query)
                 u_val = parsed_q.get("u", [""])[0]
@@ -119,22 +111,22 @@ class LinkedInFinder:
                     if padding != 4:
                         b64_str += "=" * padding
                     import base64
-                    decoded = base64.b64decode(b64_str).decode("utf-8", errors="ignore")
-                    if "linkedin.com" in decoded:
-                        return decoded
+                    decoded_candidate = base64.b64decode(b64_str).decode("utf-8", errors="ignore")
+                    if "linkedin.com" in decoded_candidate:
+                        decoded_url = decoded_candidate
             except Exception:
                 pass
 
-        return raw_url.split("?")[0]
+        return normalize_linkedin_post_url(decoded_url)
 
     def search_recruiter_posts_yahoo(self, query: str, max_results: int = DEFAULT_MAX_RESULTS) -> List[str]:
         """
-        Searches Yahoo for indexed LinkedIn recruiter posts.
+        Searches Yahoo for indexed LinkedIn /posts/ URLs.
         """
         post_urls = []
         try:
             url = "https://search.yahoo.com/search"
-            params = {"p": query, "n": max_results * 2, "age": "1w", "bt": "1w"}
+            params = {"p": query, "n": max_results * 2}
             with httpx.Client(headers=self.headers, timeout=10.0, follow_redirects=True) as client:
                 resp = client.get(url, params=params)
                 if resp.status_code == 200:
@@ -142,7 +134,7 @@ class LinkedInFinder:
                     for a in soup.find_all("a"):
                         raw_href = a.get("href", "")
                         clean_href = self.clean_linkedin_url(raw_href)
-                        if self.is_valid_recruiter_post_url(clean_href):
+                        if clean_href and is_valid_linkedin_post_url(clean_href):
                             if clean_href not in post_urls:
                                 post_urls.append(clean_href)
         except Exception:
@@ -151,7 +143,8 @@ class LinkedInFinder:
 
     def build_post_queries(self, keywords: str, location: str = DEFAULT_LOCATION) -> List[str]:
         """
-        Builds precision dorking queries targeting LinkedIn Posts only.
+        Builds precision dorking queries targeting ONLY LinkedIn /posts/.
+        Completely excludes /feed/update/ or other paths.
         """
         kw = re.sub(r'[/\\()|]', ' ', keywords)
         kw = re.sub(r'\s+', ' ', kw).replace('"', '').strip()
@@ -159,25 +152,29 @@ class LinkedInFinder:
 
         return [
             f'site:linkedin.com/posts {kw} hiring {loc}'.strip(),
-            f'site:linkedin.com/feed/update {kw} hiring {loc}'.strip(),
             f'site:linkedin.com/posts {kw} {loc} hiring'.strip(),
             f'site:linkedin.com/posts {kw} "hiring"'.strip(),
-            f'site:linkedin.com/feed/update {kw} hiring'.strip()
+            f'site:linkedin.com/posts {kw} developer hiring'.strip()
         ]
 
     def search_hiring_posts(
         self, 
         keywords: str, 
         location: str = DEFAULT_LOCATION, 
-        timeframe: Optional[str] = DEFAULT_TIMEFRAME,
+        timeframe: str = "past-24h",
         remote_only: bool = False,
         max_results: int = DEFAULT_MAX_RESULTS
     ) -> List[Dict[str, Any]]:
         """
-        Searches ONLY for genuine LinkedIn recruiter/founder posts.
-        Fetches and extracts full post text, author, HR emails, phone numbers, and required skills.
+        Searches ONLY for genuine LinkedIn recruiter/founder /posts/ URLs.
+        Enforces exact minute-level freshness window.
         """
-        cache_key = f"recruiter_posts::{keywords}::{location}::{remote_only}::{max_results}"
+        try:
+            max_age_minutes = get_max_age_minutes(timeframe)
+        except ValueError:
+            max_age_minutes = FRESHNESS_WINDOWS["past-24h"]
+
+        cache_key = f"hiring_posts::{keywords}::{location}::{timeframe}::{remote_only}::{max_results}"
         cached = self.cache.get(cache_key)
         if cached is not None and len(cached) > 0:
             return cached
@@ -186,87 +183,55 @@ class LinkedInFinder:
         search_query = f"{keywords} hiring {location}".strip() if location and location.lower() != "india" else f"{keywords} hiring".strip()
         session_posts = LinkedInSessionSearch.search_posts_internal(
             keywords=search_query,
-            date_posted="past-week",
+            date_posted=timeframe,
             max_results=max_results,
             skills_taxonomy=self.skills_taxonomy
         )
         if session_posts:
-            formatted = []
-            for sp in session_posts:
-                formatted.append({
-                    "title": sp.get("role", keywords),
-                    "company": sp.get("company", "Hiring Team"),
-                    "author": sp.get("author", "Hiring Recruiter"),
-                    "work_mode": "On-Site / Remote",
-                    "location": sp.get("location", location),
-                    "required_skills": sp.get("skills", []),
-                    "contact_emails": sp.get("recruiter_emails", []),
-                    "contact_phones": sp.get("contact_phones", []),
-                    "application_links": [sp.get("post_url", "")],
-                    "post_url": sp.get("post_url", ""),
-                    "connection_pitch": sp.get("connection_pitch", "")
-                })
-            self.cache.set(cache_key, formatted)
-            return formatted
+            self.cache.set(cache_key, session_posts)
+            return session_posts
 
-        # 2. Fallback: Search Engine Mirror Dorking
+        # 2. Fallback: Search Engine Mirror Dorking (Targeting site:linkedin.com/posts only)
         queries = self.build_post_queries(keywords, location)
-        found_urls = []
+        found_urls: List[str] = []
 
         for q in queries:
             urls = self.search_recruiter_posts_yahoo(q, max_results=max_results)
             for u in urls:
-                if u not in found_urls and self.is_valid_recruiter_post_url(u):
+                if u not in found_urls and is_valid_linkedin_post_url(u):
                     found_urls.append(u)
             if len(found_urls) >= max_results:
                 break
 
         parsed_posts = []
-        import time, datetime
         for post_url in found_urls:
             if len(parsed_posts) >= max_results:
                 break
 
-            if not self.is_valid_recruiter_post_url(post_url):
-                continue
+            # Discovery Pre-Filter: Snowflake timestamp check
+            snow_dt = extract_snowflake_timestamp(post_url)
+            if snow_dt is not None:
+                if not is_within_window(snow_dt, max_age_minutes):
+                    continue
 
-            ts = LinkedInSessionSearch.get_post_timestamp(post_url)
-            posted_human = "Recently"
-            if ts is not None:
-                age_sec = time.time() - ts
-                tf = (timeframe or "w").lower()
-                if "d" in tf or "24h" in tf:
-                    if age_sec > (86400 * 1.15):
-                        continue
-                elif "w" in tf:
-                    if age_sec > (7 * 86400 * 1.1):
-                        continue
-                elif "m" in tf:
-                    if age_sec > (31 * 86400 * 1.05):
-                        continue
-                
-                dt = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
-                if age_sec < 3600:
-                    posted_human = f"{int(age_sec // 60)} mins ago"
-                elif age_sec < 86400:
-                    posted_human = f"{int(age_sec // 3600)} hrs ago"
-                else:
-                    posted_human = f"{int(age_sec // 86400)} days ago"
-
+            # Verification: Full post extraction & exact age verification
             post_data = LinkedInPostExtractor.extract_from_url(
                 url=post_url,
-                skills_taxonomy=self.skills_taxonomy
+                skills_taxonomy=self.skills_taxonomy,
+                max_age_minutes=max_age_minutes
             )
-            if post_data and "error" not in post_data:
-                # Structure output format
+            if post_data and post_data.get("status") == "success":
                 parsed_posts.append({
                     "title": post_data.get("job_role", keywords),
-                    "company": post_data.get("author", "Hiring Recruiter"),
+                    "company": post_data.get("company", "Hiring Team"),
                     "author": post_data.get("author", "Hiring Recruiter"),
                     "work_mode": "Remote / WFH" if "remote" in post_data.get("full_post_content", "").lower() else "On-Site / Unspecified",
                     "salary_range": "Competitive / Disclosed in post",
                     "experience_required": "1-3+ Years (Estimated)",
-                    "posted_time": posted_human,
+                    "published_at": post_data.get("published_at"),
+                    "age_minutes": post_data.get("age_minutes"),
+                    "age_hours": post_data.get("age_hours"),
+                    "posted_time": post_data.get("age_text", "Recently"),
                     "required_skills": post_data.get("detected_skills", []),
                     "contact_emails": post_data.get("recruiter_emails", []),
                     "contact_phones": post_data.get("contact_numbers", []),
@@ -283,26 +248,17 @@ class LinkedInFinder:
     def search_posts(
         self,
         keywords: str,
-        date_posted: Optional[str] = "past-week",
+        date_posted: str = "past-24h",
         max_results: int = 10
     ) -> List[Dict[str, Any]]:
         """
-        Search LinkedIn posts/content globally by keyword (the 'Posts' tab) 
-        with an optional recency filter (past-24h, past-week, past-month).
-        
-        Extracts full post text, author, hiring company, HR contact emails,
-        phone numbers, required skills, and tailored recruiter pitches.
+        Search LinkedIn posts globally by keyword with an exact freshness window.
+        Supported windows: 'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d'.
         """
-        # Map date_posted to time constraint
-        age_param = "1w"
-        if date_posted:
-            dp_lower = date_posted.lower()
-            if "24h" in dp_lower or "day" in dp_lower:
-                age_param = "1d"
-            elif "month" in dp_lower:
-                age_param = "1m"
-            elif "week" in dp_lower:
-                age_param = "1w"
+        try:
+            max_age_minutes = get_max_age_minutes(date_posted)
+        except ValueError:
+            max_age_minutes = FRESHNESS_WINDOWS["past-24h"]
 
         cache_key = f"search_posts::{keywords}::{date_posted}::{max_results}"
         cached = self.cache.get(cache_key)
@@ -312,7 +268,7 @@ class LinkedInFinder:
         # 1. First priority: Authenticated LinkedIn Session Search (Posts Tab)
         session_results = LinkedInSessionSearch.search_posts_internal(
             keywords=keywords,
-            date_posted=date_posted or "past-week",
+            date_posted=date_posted,
             max_results=max_results,
             skills_taxonomy=self.skills_taxonomy
         )
@@ -320,76 +276,43 @@ class LinkedInFinder:
             self.cache.set(cache_key, session_results)
             return session_results
 
-        # 2. Fallback: Search Engine Mirror Dorking
+        # 2. Fallback: Search Engine Mirror Dorking (site:linkedin.com/posts only)
         clean_kw = re.sub(r'[/\\()|]', ' ', keywords)
         clean_kw = re.sub(r'\s+', ' ', clean_kw).replace('"', '').strip()
 
         queries = [
+            f'site:linkedin.com/posts {clean_kw} hiring',
             f'site:linkedin.com/posts {clean_kw}',
-            f'site:linkedin.com/feed/update {clean_kw}',
-            f'site:linkedin.com/posts {clean_kw} "hiring"',
-            f'site:linkedin.com {clean_kw} inurl:posts'
+            f'site:linkedin.com/posts {clean_kw} "hiring"'
         ]
 
         found_urls = []
         for q in queries:
-            try:
-                url = "https://search.yahoo.com/search"
-                params = {"p": q, "n": max_results * 2, "age": age_param, "bt": age_param}
-                with httpx.Client(headers=self.headers, timeout=10.0, follow_redirects=True) as client:
-                    resp = client.get(url, params=params)
-                    if resp.status_code == 200:
-                        soup = BeautifulSoup(resp.text, "html.parser")
-                        for a in soup.find_all("a"):
-                            raw_href = a.get("href", "")
-                            clean_href = self.clean_linkedin_url(raw_href)
-                            if self.is_valid_recruiter_post_url(clean_href):
-                                if clean_href not in found_urls:
-                                    found_urls.append(clean_href)
-            except Exception:
-                pass
+            urls = self.search_recruiter_posts_yahoo(q, max_results=max_results)
+            for u in urls:
+                if u not in found_urls and is_valid_linkedin_post_url(u):
+                    found_urls.append(u)
             if len(found_urls) >= max_results:
                 break
 
         parsed_results = []
-        import time, datetime
         for p_url in found_urls:
             if len(parsed_results) >= max_results:
                 break
 
-            # STRICT BAN on /jobs/, /jobs/view/, and non-post links
-            if not self.is_valid_recruiter_post_url(p_url):
-                continue
+            # Discovery Pre-Filter: Snowflake timestamp check
+            snow_dt = extract_snowflake_timestamp(p_url)
+            if snow_dt is not None:
+                if not is_within_window(snow_dt, max_age_minutes):
+                    continue
 
-            ts = LinkedInSessionSearch.get_post_timestamp(p_url)
-            posted_human = "Recently"
-            if ts is not None:
-                age_sec = time.time() - ts
-                dp = (date_posted or "past-week").lower()
-                if "24h" in dp or "day" in dp:
-                    if age_sec > (86400 * 1.15):
-                        continue
-                elif "week" in dp or "1w" in dp:
-                    if age_sec > (7 * 86400 * 1.1):
-                        continue
-                elif "month" in dp or "1m" in dp:
-                    if age_sec > (31 * 86400 * 1.05):
-                        continue
-                
-                dt = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
-                if age_sec < 3600:
-                    posted_human = f"{int(age_sec // 60)} mins ago"
-                elif age_sec < 86400:
-                    posted_human = f"{int(age_sec // 3600)} hrs ago"
-                else:
-                    posted_human = f"{int(age_sec // 86400)} days ago"
-
+            # Verification: Full post extraction
             post_info = LinkedInPostExtractor.extract_from_url(
                 url=p_url,
-                skills_taxonomy=self.skills_taxonomy
+                skills_taxonomy=self.skills_taxonomy,
+                max_age_minutes=max_age_minutes
             )
-            if post_info and "error" not in post_info:
-                post_info["posted_time"] = posted_human
+            if post_info and post_info.get("status") == "success":
                 parsed_results.append(post_info)
 
         if parsed_results:

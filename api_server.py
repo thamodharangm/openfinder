@@ -282,7 +282,7 @@ async def mcp_message_handler(request: Request):
                 "tools": [
                     {
                         "name": "search_posts",
-                        "description": "Searches global LinkedIn posts/content by keyword (the 'Posts' tab) with recency filters (past-24h, past-week, past-month) and extracts HR contact emails, phone numbers, and tech stack. CRITICAL DISPLAY RULE: Always present results strictly as a horizontal Markdown table with columns: # | Company | Role | Experience | Location | Posted Time | HR Contact / Email | Direct Link. Never output vertical lists.",
+                        "description": "Searches global LinkedIn /posts/ by keyword (the 'Posts' tab) with exact freshness filters ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d') and extracts HR contact emails, phone numbers, and tech stack. CRITICAL DISPLAY RULE: Always present results strictly as a horizontal Markdown table with columns: # | Company | Role | Experience | Location | Posted Time | HR Contact / Email | Direct Link. Never output vertical lists.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
@@ -292,8 +292,8 @@ async def mcp_message_handler(request: Request):
                                 },
                                 "date_posted": {
                                     "type": "string",
-                                    "description": "Recency filter: 'past-24h', 'past-week', or 'past-month'",
-                                    "default": "past-week"
+                                    "description": "Recency filter: 'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d'",
+                                    "default": "past-24h"
                                 },
                                 "max_results": {
                                     "type": "integer",
@@ -306,13 +306,13 @@ async def mcp_message_handler(request: Request):
                     },
                     {
                         "name": "parse_linkedin_post",
-                        "description": "Extracts author, hiring company, direct HR emails, phone numbers, tech stack, and tailored recruiter pitches from any LinkedIn post URL.",
+                        "description": "Extracts author, hiring company, direct HR emails, phone numbers, tech stack, and tailored recruiter pitches from any LinkedIn /posts/ URL.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
                                 "post_url": {
                                     "type": "string",
-                                    "description": "The LinkedIn post URL (e.g. https://www.linkedin.com/posts/... or /feed/update/...)"
+                                    "description": "The direct LinkedIn post URL (e.g. https://www.linkedin.com/posts/...)"
                                 },
                                 "candidate_name": {
                                     "type": "string",
@@ -519,7 +519,7 @@ async def parse_resume_endpoint(file: UploadFile = File(...)) -> Dict[str, Any]:
 async def search_jobs_by_resume_endpoint(
     file: UploadFile = File(...),
     location: str = Form("India"),
-    timeframe: str = Form("w"),
+    timeframe: str = Form("past-24h"),
     remote_only: bool = Form(False),
     min_match_score: int = Form(35)
 ) -> Dict[str, Any]:
@@ -572,7 +572,7 @@ async def search_jobs_by_resume_endpoint(
 def search_hiring_posts_endpoint(
     keywords: str = Query(..., description="Role or technical skill (e.g. 'React Developer', 'Python Backend')"),
     location: str = Query("India", description="Location (e.g. 'Bangalore', 'Remote', 'India')"),
-    timeframe: str = Query("w", description="'d' (24h), 'w' (7 days), 'm' (month)"),
+    timeframe: str = Query("past-24h", description="'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d'"),
     remote_only: bool = Query(False, description="Filter only remote positions"),
     max_results: int = Query(10, description="Max results to fetch")
 ) -> Dict[str, Any]:
@@ -589,6 +589,7 @@ def search_hiring_posts_endpoint(
             "status": "success",
             "count": len(posts),
             "query": keywords,
+            "timeframe": timeframe,
             "markdown_table": table,
             "posts": posts
         }
@@ -623,13 +624,13 @@ def generate_pitch_endpoint(
 @app.get("/api/parse-post", tags=["Post Parser"])
 @app.post("/api/parse-post", tags=["Post Parser"])
 def parse_post_endpoint(
-    post_url: str = Query(..., description="Direct LinkedIn Post URL or shortlink"),
+    post_url: str = Query(..., description="Direct LinkedIn /posts/ URL"),
     candidate_name: str = Query("Candidate", description="Your name for outreach sign-off"),
     candidate_exp_years: int = Query(2, description="Your years of experience")
 ) -> Dict[str, Any]:
     """
     Directly extracts structured hiring data (HR email, phone, skills, role)
-    from any LinkedIn recruiter post URL and generates customized outreach pitches.
+    from any genuine LinkedIn /posts/ URL and generates customized outreach pitches.
     """
     return LinkedInPostExtractor.extract_from_url(
         url=post_url,
@@ -642,11 +643,11 @@ def parse_post_endpoint(
 @app.post("/api/search-posts", tags=["Post Search"])
 def search_posts_endpoint(
     keywords: str = Query(..., description="Post keywords (e.g. 'React Developer hiring Bangalore')"),
-    date_posted: str = Query("past-week", description="Recency filter ('past-24h', 'past-week', 'past-month')"),
+    date_posted: str = Query("past-24h", description="Recency filter ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d')"),
     max_results: int = Query(10, description="Max posts to retrieve")
 ) -> Dict[str, Any]:
     """
-    Searches LinkedIn posts/content globally by keyword (the "Posts" tab) with recency filters.
+    Searches LinkedIn /posts/ globally by keyword (the 'Posts' tab) with exact freshness filters.
     """
     finder = LinkedInFinder()
     results = finder.search_posts(

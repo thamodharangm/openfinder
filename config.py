@@ -8,7 +8,7 @@ DATA_DIR.mkdir(exist_ok=True)
 CACHE_DB_PATH = DATA_DIR / "cache.db"
 
 # Search Settings
-DEFAULT_TIMEFRAME = "w"  # 'd' (past 24h), 'w' (past 7 days), 'm' (past month)
+DEFAULT_TIMEFRAME = "past-24h"  # 'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d'
 DEFAULT_LOCATION = "India"
 DEFAULT_MAX_RESULTS = 15
 CACHE_TTL_SECONDS = 1800  # 30 minutes cache for web queries

@@ -32,10 +32,10 @@
             "required": false,
             "schema": {
               "type": "string",
-              "default": "past-week",
-              "enum": ["past-24h", "past-week", "past-month"]
+              "default": "past-24h",
+              "enum": ["past-1h", "past-4h", "past-12h", "past-24h", "past-7d"]
             },
-            "description": "Recency filter: 'past-24h' (last 24 hours), 'past-week' (last 7 days), or 'past-month'"
+            "description": "Exact freshness filter: 'past-1h' (last 1 hour), 'past-4h' (4 hours), 'past-12h' (12 hours), 'past-24h' (24 hours), or 'past-7d' (7 days)"
           },
           {
             "name": "max_results",
@@ -104,9 +104,10 @@
             "required": false,
             "schema": {
               "type": "string",
-              "default": "w"
+              "default": "past-24h",
+              "enum": ["past-1h", "past-4h", "past-12h", "past-24h", "past-7d"]
             },
-            "description": "Search timeframe: 'd' (past 24h), 'w' (past 7 days), 'm' (past month)"
+            "description": "Exact freshness filter: 'past-1h' (last 1 hour), 'past-4h', 'past-12h', 'past-24h', 'past-7d'"
           },
           {
             "name": "remote_only",
