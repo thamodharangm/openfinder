@@ -1,0 +1,44 @@
+%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length 750 >>
+stream
+BT
+/F1 11 Tf
+50 740 Td
+(THAMODHARAN GANESAN) Tj
+0 -16 Td
+(MERN STACK ENGINEER | SOFTWARE ENGINEER) Tj
+0 -16 Td
+(Email: thamodharangp@gmail.com | Phone: +91 63818 93190 | Location: Theni, Tamil Nadu, India) Tj
+0 -16 Td
+(Summary: MERN Stack Engineer with 1+ year building web and mobile apps using React.js, Node.js, Express.js, MongoDB, React Native) Tj
+0 -16 Td
+(Frontend Skills: React.js, Next.js, React Native, Expo, JavaScript, HTML5, CSS3, Tailwind CSS, Bootstrap, Redux) Tj
+0 -16 Td
+(Backend Skills: Node.js, Express.js, RESTful APIs, JWT Authentication, RBAC, Spring Boot, Java) Tj
+0 -16 Td
+(Databases: MongoDB, MySQL, Supabase, Firebase) Tj
+0 -16 Td
+(Tools: Git, GitHub, Postman, VS Code, Vercel, Render, Docker) Tj
+0 -16 Td
+(Experience: Software Engineer - Trainee at Hazzino Technologies, Java Full Stack Developer Intern at Besant Technologies) Tj
+0 -16 Td
+(Education: B.E. in Electronics and Communication Engineering 2020 - 2024, CGPA: 7.62) Tj
+ET
+endstream
+endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000236 00000 n 
+0000001038 00000 n 
+trailer << /Size 6 /Root 1 0 R >>
+startxref
+1107
+%%EOF
