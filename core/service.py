@@ -12,6 +12,7 @@ from config import DEFAULT_TIMEFRAME, DEFAULT_LOCATION, DEFAULT_MAX_RESULTS, Err
 from core.resume_parser import ResumeParser
 from core.profile_store import CandidateProfileStore
 from core.linkedin_finder import LinkedInFinder
+from core.linkedin_session import LinkedInSessionSearch
 from core.ranking import OpportunityRanker
 from core.time_utils import get_max_age_minutes
 

@@ -699,18 +699,31 @@ async def search_opportunities_endpoint(
     Searches verified LinkedIn hiring /posts/ with exact freshness validation,
     directional hiring intent, and opportunity ranking against candidate profile or inline skills.
     """
-    return await service.search_opportunities_async(
-        query=query,
-        location=location,
-        timeframe=timeframe,
-        max_results=max_results,
-        remote_only=remote_only,
-        candidate_profile_id=candidate_profile_id,
-        candidate_skills=candidate_skills,
-        candidate_exp_years=candidate_exp_years,
-        candidate_name=candidate_name,
-        debug=debug
-    )
+    try:
+        return await service.search_opportunities_async(
+            query=query,
+            location=location,
+            timeframe=timeframe,
+            max_results=max_results,
+            remote_only=remote_only,
+            candidate_profile_id=candidate_profile_id,
+            candidate_skills=candidate_skills,
+            candidate_exp_years=candidate_exp_years,
+            candidate_name=candidate_name,
+            debug=debug
+        )
+    except Exception as e:
+        import traceback
+        logger.error(f"❌ [REST search-opportunities Error]: {traceback.format_exc()}")
+        return {
+            "status": "error",
+            "query": query,
+            "location": location,
+            "timeframe": timeframe,
+            "count": 0,
+            "results": [],
+            "message": f"Search encountered an internal exception: {str(e)}"
+        }
 
 
 # ==========================================================
