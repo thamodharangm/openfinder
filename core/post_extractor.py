@@ -133,9 +133,25 @@ class LinkedInPostExtractor:
                 
                 og_title = soup.find("meta", property="og:title")
                 og_desc = soup.find("meta", property="og:description")
+                og_url = soup.find("meta", property="og:url")
+                canonical_tag = soup.find("link", rel="canonical")
                 
                 title_str = og_title.get("content", "").strip() if og_title else ""
                 full_text = og_desc.get("content", "").strip() if og_desc else soup.get_text()
+
+                # Strictly resolve clean standalone /posts/ URL (eliminate /feed/ links)
+                canonical_url = ""
+                if og_url and og_url.get("content"):
+                    canonical_url = og_url.get("content").strip()
+                elif canonical_tag and canonical_tag.get("href"):
+                    canonical_url = canonical_tag.get("href").strip()
+
+                if canonical_url and "/posts/" in canonical_url:
+                    final_post_url = canonical_url.split("?")[0]
+                elif "/posts/" in clean_url:
+                    final_post_url = clean_url.split("?")[0]
+                else:
+                    final_post_url = canonical_url.split("?")[0] if canonical_url else clean_url
 
                 # Author info from title (e.g. "Title ... | Author Name")
                 author = "Hiring Manager / Recruiter"
@@ -191,7 +207,7 @@ class LinkedInPostExtractor:
 
                 result = {
                     "status": "success",
-                    "post_url": clean_url,
+                    "post_url": final_post_url,
                     "author": author,
                     "company": company,
                     "job_role": role,

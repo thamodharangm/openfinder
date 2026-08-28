@@ -201,7 +201,7 @@ class LinkedInSessionSearch:
                 "recruiter_emails": post_data.get("recruiter_emails", []),
                 "contact_phones": post_data.get("contact_numbers", []),
                 "skills": post_data.get("detected_skills", []),
-                "post_url": p_url,
+                "post_url": post_data.get("post_url") or p_url,
                 "connection_pitch": pitch_note
             }
             results.append(compact_item)
