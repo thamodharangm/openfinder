@@ -6,24 +6,32 @@ import sys
 
 # Ensure root in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from config import SKILL_TAXONOMY, COMMON_SKILLS
+from config import SKILL_TAXONOMY, COMMON_SKILLS, MAX_RESUME_FILE_BYTES, ErrorCodes
 
 
 class ResumeParser:
     """
-    Advanced Professional-Grade Resume Parser.
+    Production-Hardened Professional Resume Parser.
     Extracts categorized technical skills, seniority level, contact info, 
-    key project indicators, and target job profiles.
+    key project indicators, and target job profiles with security validation.
     """
 
     def __init__(self):
         self.taxonomy = SKILL_TAXONOMY
 
     def extract_text_from_pdf(self, pdf_path: str) -> str:
-        """Extracts text from PDF resume with multi-page handling."""
-        file_path = Path(pdf_path)
-        if not file_path.exists():
+        """Extracts text from PDF resume with multi-page handling and security checks."""
+        if not pdf_path:
+            raise ValueError("Resume file path cannot be empty.")
+
+        file_path = Path(pdf_path).resolve()
+        if not file_path.exists() or not file_path.is_file():
             raise FileNotFoundError(f"Resume file not found at: {pdf_path}")
+
+        # Security check: file size limit
+        file_size = file_path.stat().st_size
+        if file_size > MAX_RESUME_FILE_BYTES:
+            raise ValueError(f"Resume file exceeds maximum allowed size of {MAX_RESUME_FILE_BYTES // (1024*1024)}MB.")
 
         extracted_text = []
         try:
@@ -37,12 +45,15 @@ class ResumeParser:
 
         full_text = "\n".join(extracted_text)
         if not full_text.strip():
-            raise ValueError("The PDF contains no readable text (it may be a scanned image).")
+            raise ValueError("The PDF contains no readable text (it may be an empty document or image-only scan).")
 
         return full_text
 
     def extract_categorized_skills(self, text: str) -> Dict[str, List[str]]:
         """Categorizes all matched technical skills into domains."""
+        if not text:
+            return {}
+
         text_lower = text.lower()
         categorized = {}
 
@@ -59,6 +70,9 @@ class ResumeParser:
 
     def extract_candidate_name_and_contact(self, text: str) -> Dict[str, Optional[str]]:
         """Extracts email, phone, and candidate name if present."""
+        if not text:
+            return {"name": "Candidate", "email": None, "phone": None, "github": None, "linkedin": None}
+
         email_pattern = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
         phone_pattern = r'(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}'
         github_pattern = r'github\.com/([a-zA-Z0-9_-]+)'
@@ -69,7 +83,6 @@ class ResumeParser:
         github = re.search(github_pattern, text, re.IGNORECASE)
         linkedin = re.search(linkedin_pattern, text, re.IGNORECASE)
 
-        # First non-empty line is often the candidate's name
         lines = [l.strip() for l in text.splitlines() if l.strip()]
         candidate_name = lines[0] if lines and len(lines[0]) < 40 and not re.search(r'[@/:]', lines[0]) else "Candidate"
 
@@ -83,6 +96,9 @@ class ResumeParser:
 
     def estimate_experience_and_seniority(self, text: str) -> Dict[str, Any]:
         """Calculates years of experience and assigns a seniority band."""
+        if not text:
+            return {"years": 2, "seniority_level": "Mid-Level (2-4 Years)"}
+
         patterns = [
             r'(\d+)\+?\s*(?:years?|yrs?)\s*(?:of)?\s*experience',
             r'experience\s*:\s*(\d+)\+?\s*(?:years?|yrs?)',
@@ -100,7 +116,6 @@ class ResumeParser:
                     pass
 
         if exp_years is None:
-            # Fallback estimation based on graduation year or keyword density
             if "intern" in text_lower or "fresher" in text_lower or "entry level" in text_lower:
                 exp_years = 1
                 seniority = "Junior / Entry-Level (0-2 Years)"
@@ -127,9 +142,10 @@ class ResumeParser:
 
     def infer_target_roles(self, text: str, categorized_skills: Dict[str, List[str]]) -> List[str]:
         """Infers recommended target job roles based on skills & keywords."""
-        text_lower = text.lower()
-        roles = set()
+        if not text:
+            return ["Software Engineer"]
 
+        roles = set()
         all_skills_lower = {s.lower() for cat in categorized_skills.values() for s in cat}
 
         if {"react", "react.js", "next.js"}.intersection(all_skills_lower) and {"node.js", "nodejs", "express"}.intersection(all_skills_lower):

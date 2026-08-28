@@ -10,7 +10,7 @@ from pathlib import Path
 # Add root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config import COMMON_SKILLS
+from config import COMMON_SKILLS, ErrorCodes, MAX_POST_PAYLOAD_BYTES
 from core.linkedin_urls import is_valid_linkedin_post_url, normalize_linkedin_post_url
 from core.time_utils import (
     parse_timestamp,
@@ -424,10 +424,23 @@ class LinkedInPostExtractor:
 
             if resp is None or resp.status_code != 200:
                 code = resp.status_code if resp else "UNKNOWN"
+                reason = ErrorCodes.FETCH_FAILED
+                if code == 429:
+                    reason = ErrorCodes.RATE_LIMITED
+                elif code in [401, 403]:
+                    reason = ErrorCodes.AUTH_REQUIRED
+
                 return {
                     "status": "error",
-                    "reason": "FETCH_FAILED",
+                    "reason": reason,
                     "error": f"HTTP {code}",
+                }
+
+            if len(resp.content) > MAX_POST_PAYLOAD_BYTES:
+                return {
+                    "status": "rejected",
+                    "reason": ErrorCodes.FILE_TOO_LARGE,
+                    "error": f"Post payload exceeded size limit ({len(resp.content)} bytes)."
                 }
 
             return cls._parse_html_to_post_data(

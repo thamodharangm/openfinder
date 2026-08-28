@@ -172,8 +172,13 @@ Examples:
         print(f"🎯 Found {len(ranked)} Matched Posts:\n")
 
         for idx, job in enumerate(ranked[:args.results], 1):
-            print(f"[{idx}] {job['title']} by {job['company']}")
-            print(f"    Match Score: {job['match_score']}% ({job['match_grade']})")
+            print(f"[{idx}] {job['title']} @ {job['company']} ({job.get('posted_time', 'Recently')})")
+            final_sc = job.get('final_rank_score', job.get('match_score', 0))
+            fit_sc = job.get('candidate_match_score', job.get('match_score', 0))
+            qual_sc = job.get('post_quality_score', 'N/A')
+            print(f"    Final Score: {final_sc}/100 | Candidate Fit: {fit_sc}% | Post Quality: {qual_sc}/100")
+            if job.get("ranking_summary"):
+                print(f"    Summary: {job.get('ranking_summary')}")
             print(f"    Matched Skills: {job.get('matched_skills', [])}")
             if job.get("missing_skills"):
                 print(f"    Missing Skills: {job.get('missing_skills', [])}")
