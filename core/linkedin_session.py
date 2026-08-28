@@ -1,5 +1,7 @@
 import os
 import re
+import time
+import asyncio
 import urllib.parse
 from typing import List, Dict, Any, Optional, Set, Tuple
 import httpx
@@ -27,11 +29,10 @@ from config import COMMON_SKILLS
 
 class LinkedInSessionSearch:
     """
-    Directly queries LinkedIn's internal 'Posts' Search Tab (/search/results/content/)
-    using an authenticated user session cookie (li_at, JSESSIONID).
-    
-    Supports safe pagination, multi-query expansion, timeframe-aware early stopping,
-    cross-query deduplication, and detailed discovery funnel metrics.
+    High-Performance Asynchronous LinkedIn Content Search & Discovery Engine.
+    Queries LinkedIn's internal 'Posts' Search Tab (/search/results/content/)
+    with connection pooling, multi-query expansion, bounded async batch extraction,
+    and granular timing metrics.
     """
 
     HEADERS = {
@@ -48,7 +49,9 @@ class LinkedInSessionSearch:
         "Upgrade-Insecure-Requests": "1"
     }
 
-    # In-memory deduplication across sessions
+    TIMEOUT_CONFIG = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=10.0)
+    MAX_CONCURRENCY = 5
+
     _SEEN_POST_IDS: Set[str] = set()
 
     @classmethod
@@ -94,7 +97,7 @@ class LinkedInSessionSearch:
         }
 
     @classmethod
-    def search_posts_internal(
+    async def search_posts_internal_async(
         cls,
         keywords: str,
         date_posted: str = "past-24h",
@@ -103,12 +106,15 @@ class LinkedInSessionSearch:
         target_role: Optional[str] = None,
         target_location: Optional[str] = None,
         max_discovery_candidates: int = 40,
+        max_concurrency: int = MAX_CONCURRENCY,
         debug: bool = False
     ) -> List[Dict[str, Any]]:
         """
-        High-recall, high-precision LinkedIn Posts discovery.
-        Iterates through diverse query variants with timeframe-aware pagination and early stopping.
+        Asynchronously searches LinkedIn posts with connection pooling, multi-query expansion,
+        bounded concurrent extraction, and timing metrics.
         """
+        t_start = time.perf_counter()
+
         session_health = cls.check_session_health()
         if not session_health["valid"]:
             return []
@@ -116,7 +122,6 @@ class LinkedInSessionSearch:
         cookies = cls.get_cookies_dict()
         skills_taxonomy = skills_taxonomy or COMMON_SKILLS
         
-        # 1. Parse Search Intent
         intent = SearchIntentParser.parse(
             keywords=target_role or keywords,
             location=target_location or "India",
@@ -125,7 +130,6 @@ class LinkedInSessionSearch:
 
         max_age_minutes = intent.max_age_minutes
 
-        # Timeframe-aware pagination depth & query volume
         if max_age_minutes <= 60:        # past-1h
             max_queries = 2
             max_pages = 2
@@ -139,14 +143,12 @@ class LinkedInSessionSearch:
             max_queries = 5
             max_pages = 4
 
-        # Native datePosted param
         tf_param = "%22past-24h%22" if max_age_minutes <= 1440 else "%22past-week%22"
 
         headers = dict(cls.HEADERS)
         if "JSESSIONID" in cookies:
             headers["csrf-token"] = cookies["JSESSIONID"].strip('"')
 
-        # Funnel Metrics
         metrics = {
             "queries_attempted": 0,
             "pages_fetched": 0,
@@ -156,17 +158,21 @@ class LinkedInSessionSearch:
             "role_candidates": 0,
             "hiring_candidates": 0,
             "deep_extracted": 0,
-            "final_results": 0
+            "final_results": 0,
+            "timing_ms": {}
         }
 
-        # Multi-query expansion
         query_variants = intent.generate_diverse_session_queries(max_queries=max_queries)
-        candidate_pool: List[Tuple[str, str, int]] = []  # (url, matched_query, page_num)
+        candidate_pool: List[Tuple[str, str, int]] = []
         discovered_urls_set: Set[str] = set()
 
+        t_disc_start = time.perf_counter()
+
+        # 1. Async Discovery Phase
+        limits = httpx.Limits(max_keepalive_connections=20, max_connections=30)
         try:
-            with httpx.Client(headers=headers, cookies=cookies, timeout=15.0, follow_redirects=True) as client:
-                for q_idx, q_str in enumerate(query_variants, 1):
+            async with httpx.AsyncClient(headers=headers, cookies=cookies, timeout=cls.TIMEOUT_CONFIG, limits=limits, follow_redirects=True) as client:
+                for q_str in query_variants:
                     metrics["queries_attempted"] += 1
                     encoded_kw = urllib.parse.quote(q_str)
 
@@ -174,14 +180,13 @@ class LinkedInSessionSearch:
                         metrics["pages_fetched"] += 1
                         page_url = f"https://www.linkedin.com/search/results/content/?keywords={encoded_kw}&datePosted={tf_param}&sortBy=%22date_posted%22&page={page_num}"
                         
-                        resp = client.get(page_url)
+                        resp = await client.get(page_url)
                         if resp.status_code != 200 or "login" in str(resp.url):
                             break
 
                         raw_text = resp.text
                         soup = BeautifulSoup(raw_text, "html.parser")
 
-                        # Direct DOM anchors & regex extraction
                         page_found_urls = []
                         for a in soup.find_all("a"):
                             href = a.get("href", "")
@@ -197,7 +202,6 @@ class LinkedInSessionSearch:
 
                         metrics["raw_candidates"] += len(page_found_urls)
 
-                        # Early stopping on empty page
                         if not page_found_urls:
                             break
 
@@ -209,7 +213,6 @@ class LinkedInSessionSearch:
                                 new_on_page += 1
                                 metrics["unique_candidates"] += 1
 
-                                # Freshness pre-filter via Snowflake timestamp
                                 snow_dt = extract_snowflake_timestamp(u)
                                 if snow_dt is not None:
                                     if is_within_window(snow_dt, max_age_minutes):
@@ -217,16 +220,13 @@ class LinkedInSessionSearch:
                                         metrics["fresh_candidates"] += 1
                                         candidate_pool.append((u, q_str, page_num))
                                 else:
-                                    # Fallback: keep for deep verification
                                     page_fresh_count += 1
                                     metrics["fresh_candidates"] += 1
                                     candidate_pool.append((u, q_str, page_num))
 
-                        # Early stopping if no new candidates or all posts stale on this page
                         if new_on_page == 0:
                             break
                         if page_fresh_count == 0 and len(page_found_urls) > 0:
-                            # Stale boundary reached for this query
                             break
 
                         if len(candidate_pool) >= max_discovery_candidates:
@@ -238,23 +238,34 @@ class LinkedInSessionSearch:
         except Exception as e:
             print(f"LinkedIn session search error: {e}")
 
-        # Deep Extraction & Strict Verification
-        results = []
-        for p_url, q_matched, p_page in candidate_pool:
-            if len(results) >= max_results:
-                break
+        t_disc_end = time.perf_counter()
+        metrics["timing_ms"]["discovery_time_ms"] = int((t_disc_end - t_disc_start) * 1000)
 
+        # 2. Async Concurrent Deep Extraction Phase
+        t_ext_start = time.perf_counter()
+        
+        urls_to_extract = [item[0] for item in candidate_pool]
+        url_metadata_map = {item[0]: (item[1], item[2]) for item in candidate_pool}
+
+        extracted_batch = await LinkedInPostExtractor.extract_batch_async(
+            urls=urls_to_extract,
+            max_concurrency=max_concurrency,
+            skills_taxonomy=skills_taxonomy,
+            target_role=intent.target_role,
+            target_location=intent.target_location,
+            max_age_minutes=max_age_minutes
+        )
+
+        t_ext_end = time.perf_counter()
+        metrics["timing_ms"]["extraction_time_ms"] = int((t_ext_end - t_ext_start) * 1000)
+
+        # 3. Deterministic Filtering & Quality Ranking Phase
+        t_rank_start = time.perf_counter()
+        results = []
+
+        for post_data in extracted_batch:
             metrics["deep_extracted"] += 1
 
-            post_data = LinkedInPostExtractor.extract_from_url(
-                url=p_url,
-                skills_taxonomy=skills_taxonomy,
-                max_age_minutes=max_age_minutes,
-                target_role=intent.target_role,
-                target_location=intent.target_location
-            )
-
-            # Strict Phase 1/2/3 Verification
             if not post_data or post_data.get("status") != "success":
                 continue
 
@@ -267,8 +278,10 @@ class LinkedInSessionSearch:
                 continue
             metrics["role_candidates"] += 1
 
+            p_url = post_data.get("post_url")
             cls._SEEN_POST_IDS.add(p_url)
             pitch_note = post_data.get("tailored_outreach_pitches", {}).get("linkedin_connection_note_300_chars", "")
+            q_matched, p_page = url_metadata_map.get(p_url, ("", 1))
 
             compact_item = {
                 "title": post_data.get("job_role", "Software Engineer"),
@@ -293,6 +306,7 @@ class LinkedInSessionSearch:
                 "recruiter_emails": post_data.get("recruiter_emails", []),
                 "contact_emails": post_data.get("recruiter_emails", []),
                 "contact_phones": post_data.get("contact_numbers", []),
+                "contact_numbers": post_data.get("contact_numbers", []),
                 "skills": post_data.get("detected_skills", []),
                 "post_url": p_url,
                 "connection_pitch": pitch_note,
@@ -300,14 +314,84 @@ class LinkedInSessionSearch:
                 "query_matched": q_matched,
                 "page_found": p_page
             }
-
-            if debug:
-                compact_item["_funnel_metrics"] = metrics
-
             results.append(compact_item)
 
-        metrics["final_results"] = len(results)
-
-        # Sort by post_quality_score
+        # Deterministic sort by post_quality_score
         results.sort(key=lambda x: x.get("post_quality_score", 0), reverse=True)
-        return results
+        final_results = results[:max_results]
+
+        t_rank_end = time.perf_counter()
+        metrics["timing_ms"]["ranking_time_ms"] = int((t_rank_end - t_rank_start) * 1000)
+        metrics["timing_ms"]["total_time_ms"] = int((t_rank_end - t_start) * 1000)
+        metrics["final_results"] = len(final_results)
+
+        if debug and final_results:
+            final_results[0]["_funnel_metrics"] = metrics
+            final_results[0]["_timing_ms"] = metrics["timing_ms"]
+
+        return final_results
+
+    @classmethod
+    def search_posts_internal(
+        cls,
+        keywords: str,
+        date_posted: str = "past-24h",
+        max_results: int = 10,
+        skills_taxonomy: Optional[List[str]] = None,
+        target_role: Optional[str] = None,
+        target_location: Optional[str] = None,
+        max_discovery_candidates: int = 40,
+        max_concurrency: int = MAX_CONCURRENCY,
+        debug: bool = False
+    ) -> List[Dict[str, Any]]:
+        """
+        Synchronous entrypoint. Automatically delegates to async execution engine.
+        """
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Running inside an active loop (e.g. FastAPI / Jupyter)
+                # Create a task in the loop or run directly
+                import nest_asyncio
+                nest_asyncio.apply()
+                return loop.run_until_complete(
+                    cls.search_posts_internal_async(
+                        keywords=keywords,
+                        date_posted=date_posted,
+                        max_results=max_results,
+                        skills_taxonomy=skills_taxonomy,
+                        target_role=target_role,
+                        target_location=target_location,
+                        max_discovery_candidates=max_discovery_candidates,
+                        max_concurrency=max_concurrency,
+                        debug=debug
+                    )
+                )
+            else:
+                return loop.run_until_complete(
+                    cls.search_posts_internal_async(
+                        keywords=keywords,
+                        date_posted=date_posted,
+                        max_results=max_results,
+                        skills_taxonomy=skills_taxonomy,
+                        target_role=target_role,
+                        target_location=target_location,
+                        max_discovery_candidates=max_discovery_candidates,
+                        max_concurrency=max_concurrency,
+                        debug=debug
+                    )
+                )
+        except Exception:
+            return asyncio.run(
+                cls.search_posts_internal_async(
+                    keywords=keywords,
+                    date_posted=date_posted,
+                    max_results=max_results,
+                    skills_taxonomy=skills_taxonomy,
+                    target_role=target_role,
+                    target_location=target_location,
+                    max_discovery_candidates=max_discovery_candidates,
+                    max_concurrency=max_concurrency,
+                    debug=debug
+                )
+            )
