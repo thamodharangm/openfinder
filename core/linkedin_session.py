@@ -131,10 +131,37 @@ class LinkedInSessionSearch:
 
         results = []
         seen_authors_and_roles = set()
+        import time
+        import datetime
 
         for p_url in collected_urls:
             if len(results) >= max_results:
                 break
+
+            # STRICT SNOWFLAKE TIMESTAMP FILTER: Drop any post outside target timeframe
+            ts = cls.get_post_timestamp(p_url)
+            posted_human = "Recently"
+            if ts is not None:
+                age_sec = time.time() - ts
+                dp = date_posted.lower()
+                if "24h" in dp or "day" in dp:
+                    if age_sec > (86400 * 1.15):
+                        continue
+                elif "week" in dp or "1w" in dp:
+                    if age_sec > (7 * 86400 * 1.1):
+                        continue
+                elif "month" in dp or "1m" in dp:
+                    if age_sec > (31 * 86400 * 1.05):
+                        continue
+                
+                # Human readable age
+                dt = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+                if age_sec < 3600:
+                    posted_human = f"{int(age_sec // 60)} mins ago"
+                elif age_sec < 86400:
+                    posted_human = f"{int(age_sec // 3600)} hrs ago"
+                else:
+                    posted_human = f"{int(age_sec // 86400)} days ago"
 
             post_data = LinkedInPostExtractor.extract_from_url(
                 url=p_url,
@@ -165,6 +192,7 @@ class LinkedInSessionSearch:
                 "author": author,
                 "company": post_data.get("company", "Hiring Team"),
                 "location": post_data.get("location", "Unspecified / Remote"),
+                "posted_time": posted_human,
                 "recruiter_emails": post_data.get("recruiter_emails", []),
                 "contact_phones": post_data.get("contact_numbers", []),
                 "skills": post_data.get("detected_skills", []),
@@ -174,3 +202,15 @@ class LinkedInSessionSearch:
             results.append(compact_item)
 
         return results
+
+    @classmethod
+    def get_post_timestamp(cls, post_url: str) -> Optional[float]:
+        """Extracts exact creation timestamp (in seconds) from LinkedIn snowflake activity/share ID."""
+        match = re.search(r'(?:activity|share)[:-](\d+)', post_url)
+        if match:
+            try:
+                aid = int(match.group(1))
+                return (aid >> 22) / 1000.0
+            except Exception:
+                pass
+        return None

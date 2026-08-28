@@ -72,14 +72,20 @@ Examples:
 
         print(f"✅ Found {len(posts)} Posts:\n")
         for idx, p in enumerate(posts, 1):
-            print(f"[{idx}] {p.get('job_role', 'Post')} by {p.get('author')}")
+            role = p.get('job_role') or p.get('role') or 'Post'
+            print(f"[{idx}] {role} by {p.get('author')}")
             print(f"    🏢 Company: {p.get('company')} | 📍 Location: {p.get('location')}")
-            if p.get("recruiter_emails"):
-                print(f"    📧 Email: {', '.join(p['recruiter_emails'])}")
-            if p.get("contact_numbers"):
-                print(f"    📞 Phone: {', '.join(p['contact_numbers'])}")
-            if p.get("detected_skills"):
-                print(f"    🛠️ Skills: {', '.join(p['detected_skills'])}")
+            if p.get("posted_time"):
+                print(f"    🕒 Posted: {p.get('posted_time')}")
+            emails = p.get("recruiter_emails") or []
+            if emails:
+                print(f"    📧 Email: {', '.join(emails)}")
+            phones = p.get("contact_phones") or p.get("contact_numbers") or []
+            if phones:
+                print(f"    📞 Phone: {', '.join(phones)}")
+            skills = p.get("skills") or p.get("detected_skills") or []
+            if skills:
+                print(f"    🛠️ Skills: {', '.join(skills)}")
             print(f"    🔗 Post URL: {p.get('post_url')}")
             print("-" * 65)
         return
