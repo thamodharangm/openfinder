@@ -27,7 +27,7 @@ class LinkedInFinder:
     """
     Finds real-time genuine LinkedIn recruiter & founder hiring posts (STRICTLY /posts/ URLs only).
     Completely rejects any corporate job board listings (/jobs/view/) or feed links.
-    Enforces exact minute-level publication freshness.
+    Enforces exact minute-level publication freshness and verified HIRING intent.
     """
 
     def __init__(self, skills_taxonomy: Optional[List[str]] = None):
@@ -143,18 +143,20 @@ class LinkedInFinder:
 
     def build_post_queries(self, keywords: str, location: str = DEFAULT_LOCATION) -> List[str]:
         """
-        Builds precision dorking queries targeting ONLY LinkedIn /posts/.
+        Builds precision dorking queries targeting ONLY LinkedIn /posts/ with explicit hiring intent.
         Completely excludes /feed/update/ or other paths.
         """
         kw = re.sub(r'[/\\()|]', ' ', keywords)
         kw = re.sub(r'\s+', ' ', kw).replace('"', '').strip()
-        loc = location.replace('"', '').strip() if location else ""
+        loc = location.replace('"', '').strip() if location and location.lower() != "india" else ""
 
+        loc_str = f" {loc}" if loc else ""
         return [
-            f'site:linkedin.com/posts {kw} hiring {loc}'.strip(),
-            f'site:linkedin.com/posts {kw} {loc} hiring'.strip(),
-            f'site:linkedin.com/posts {kw} "hiring"'.strip(),
-            f'site:linkedin.com/posts {kw} developer hiring'.strip()
+            f'site:linkedin.com/posts "{kw}" "we are hiring"{loc_str}'.strip(),
+            f'site:linkedin.com/posts "{kw}" "send resume"{loc_str}'.strip(),
+            f'site:linkedin.com/posts "{kw}" "hiring"{loc_str}'.strip(),
+            f'site:linkedin.com/posts "{kw}" "looking for"{loc_str}'.strip(),
+            f'site:linkedin.com/posts "{kw}" "urgent opening"{loc_str}'.strip(),
         ]
 
     def search_hiring_posts(
@@ -167,7 +169,7 @@ class LinkedInFinder:
     ) -> List[Dict[str, Any]]:
         """
         Searches ONLY for genuine LinkedIn recruiter/founder /posts/ URLs.
-        Enforces exact minute-level freshness window.
+        Enforces exact minute-level freshness window and verified HIRING intent.
         """
         try:
             max_age_minutes = get_max_age_minutes(timeframe)
@@ -185,9 +187,13 @@ class LinkedInFinder:
             keywords=search_query,
             date_posted=timeframe,
             max_results=max_results,
-            skills_taxonomy=self.skills_taxonomy
+            skills_taxonomy=self.skills_taxonomy,
+            target_role=keywords,
+            target_location=location
         )
         if session_posts:
+            # Sort by post_quality_score
+            session_posts.sort(key=lambda x: x.get("post_quality_score", 0), reverse=True)
             self.cache.set(cache_key, session_posts)
             return session_posts
 
@@ -214,24 +220,34 @@ class LinkedInFinder:
                 if not is_within_window(snow_dt, max_age_minutes):
                     continue
 
-            # Verification: Full post extraction & exact age verification
+            # Verification: Full post extraction, exact age & hiring intent verification
             post_data = LinkedInPostExtractor.extract_from_url(
                 url=post_url,
                 skills_taxonomy=self.skills_taxonomy,
-                max_age_minutes=max_age_minutes
+                max_age_minutes=max_age_minutes,
+                target_role=keywords,
+                target_location=location
             )
-            if post_data and post_data.get("status") == "success":
+            if post_data and post_data.get("status") == "success" and post_data.get("hiring_intent") == "HIRING":
                 parsed_posts.append({
                     "title": post_data.get("job_role", keywords),
                     "company": post_data.get("company", "Hiring Team"),
                     "author": post_data.get("author", "Hiring Recruiter"),
+                    "author_type": post_data.get("author_type", "RECRUITER"),
                     "work_mode": "Remote / WFH" if "remote" in post_data.get("full_post_content", "").lower() else "On-Site / Unspecified",
                     "salary_range": "Competitive / Disclosed in post",
-                    "experience_required": "1-3+ Years (Estimated)",
+                    "experience_required": f"{post_data.get('experience_match_score', 75)}% Fit",
                     "published_at": post_data.get("published_at"),
                     "age_minutes": post_data.get("age_minutes"),
                     "age_hours": post_data.get("age_hours"),
                     "posted_time": post_data.get("age_text", "Recently"),
+                    "hiring_intent": post_data.get("hiring_intent", "HIRING"),
+                    "hiring_confidence": post_data.get("hiring_confidence", 0.9),
+                    "role_match_score": post_data.get("role_match_score", 90),
+                    "location_match_score": post_data.get("location_match_score", 100),
+                    "experience_match_score": post_data.get("experience_match_score", 75),
+                    "post_quality_score": post_data.get("post_quality_score", 85),
+                    "is_spam": False,
                     "required_skills": post_data.get("detected_skills", []),
                     "contact_emails": post_data.get("recruiter_emails", []),
                     "contact_phones": post_data.get("contact_numbers", []),
@@ -239,6 +255,9 @@ class LinkedInFinder:
                     "post_url": post_url,
                     "raw_snippet": post_data.get("full_post_content", "")[:350]
                 })
+
+        # Sort by post_quality_score
+        parsed_posts.sort(key=lambda x: x.get("post_quality_score", 0), reverse=True)
 
         if parsed_posts:
             self.cache.set(cache_key, parsed_posts)
@@ -249,10 +268,11 @@ class LinkedInFinder:
         self,
         keywords: str,
         date_posted: str = "past-24h",
-        max_results: int = 10
+        max_results: int = 10,
+        location: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
-        Search LinkedIn posts globally by keyword with an exact freshness window.
+        Search LinkedIn posts globally by keyword with an exact freshness window and hiring intent.
         Supported windows: 'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d'.
         """
         try:
@@ -260,7 +280,7 @@ class LinkedInFinder:
         except ValueError:
             max_age_minutes = FRESHNESS_WINDOWS["past-24h"]
 
-        cache_key = f"search_posts::{keywords}::{date_posted}::{max_results}"
+        cache_key = f"search_posts::{keywords}::{date_posted}::{location}::{max_results}"
         cached = self.cache.get(cache_key)
         if cached is not None and len(cached) > 0:
             return cached
@@ -270,20 +290,24 @@ class LinkedInFinder:
             keywords=keywords,
             date_posted=date_posted,
             max_results=max_results,
-            skills_taxonomy=self.skills_taxonomy
+            skills_taxonomy=self.skills_taxonomy,
+            target_role=keywords,
+            target_location=location
         )
         if session_results:
+            session_results.sort(key=lambda x: x.get("post_quality_score", 0), reverse=True)
             self.cache.set(cache_key, session_results)
             return session_results
 
         # 2. Fallback: Search Engine Mirror Dorking (site:linkedin.com/posts only)
         clean_kw = re.sub(r'[/\\()|]', ' ', keywords)
         clean_kw = re.sub(r'\s+', ' ', clean_kw).replace('"', '').strip()
+        loc_str = f" {location}" if location else ""
 
         queries = [
-            f'site:linkedin.com/posts {clean_kw} hiring',
-            f'site:linkedin.com/posts {clean_kw}',
-            f'site:linkedin.com/posts {clean_kw} "hiring"'
+            f'site:linkedin.com/posts "{clean_kw}" "we are hiring"{loc_str}'.strip(),
+            f'site:linkedin.com/posts "{clean_kw}" "send resume"{loc_str}'.strip(),
+            f'site:linkedin.com/posts "{clean_kw}" hiring{loc_str}'.strip()
         ]
 
         found_urls = []
@@ -306,14 +330,19 @@ class LinkedInFinder:
                 if not is_within_window(snow_dt, max_age_minutes):
                     continue
 
-            # Verification: Full post extraction
+            # Verification: Full post extraction & hiring intent verification
             post_info = LinkedInPostExtractor.extract_from_url(
                 url=p_url,
                 skills_taxonomy=self.skills_taxonomy,
-                max_age_minutes=max_age_minutes
+                max_age_minutes=max_age_minutes,
+                target_role=keywords,
+                target_location=location
             )
-            if post_info and post_info.get("status") == "success":
+            if post_info and post_info.get("status") == "success" and post_info.get("hiring_intent") == "HIRING":
                 parsed_results.append(post_info)
+
+        # Sort by post_quality_score
+        parsed_results.sort(key=lambda x: x.get("post_quality_score", 0), reverse=True)
 
         if parsed_results:
             self.cache.set(cache_key, parsed_results)

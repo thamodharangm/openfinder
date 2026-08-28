@@ -18,14 +18,21 @@ from core.time_utils import (
     get_max_age_minutes,
     FRESHNESS_WINDOWS
 )
+from core.hiring_intent import (
+    HiringIntentClassifier,
+    RoleRelevanceMatcher,
+    LocationRelevanceMatcher,
+    ExperienceRelevanceMatcher,
+    QualityScorer
+)
 from core.pitch_generator import OutreachPitchGenerator
 from core.matcher import JobMatcher
 
 
 class LinkedInPostExtractor:
     """
-    Extracts structured hiring intelligence ONLY from genuine LinkedIn /posts/ URLs
-    AND validates exact publication time down to the minute.
+    Extracts structured hiring intelligence ONLY from genuine LinkedIn /posts/ URLs,
+    validates exact publication time down to the minute, and classifies directional hiring intent.
     """
 
     HEADERS = {
@@ -158,11 +165,13 @@ class LinkedInPostExtractor:
         candidate_name: str = "Candidate",
         candidate_exp_years: int = 2,
         max_age_minutes: Optional[int] = None,
-        timeframe: Optional[str] = None
+        timeframe: Optional[str] = None,
+        target_role: Optional[str] = None,
+        target_location: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Extracts intelligence strictly from a valid LinkedIn /posts/ URL.
-        Enforces exact minute-level freshness window.
+        Enforces exact minute-level freshness window & hiring-intent classification.
         """
         norm_url = normalize_linkedin_post_url(url)
 
@@ -194,6 +203,7 @@ class LinkedInPostExtractor:
             candidate_name = candidate_profile.get("candidate_name", candidate_name)
             candidate_exp_years = candidate_profile.get("years_of_experience", candidate_exp_years)
             cand_skills = candidate_profile.get("top_skills", [])
+            target_role = target_role or candidate_profile.get("primary_role")
         else:
             cand_skills = []
 
@@ -261,6 +271,44 @@ class LinkedInPostExtractor:
                 if "|" in title_str:
                     author = title_str.split("|")[-1].strip()
 
+                # =================================================
+                # 4. Hiring Intent Classification & Spam Filter
+                # =================================================
+                intent_res = HiringIntentClassifier.classify(
+                    text=full_text,
+                    author_headline=author,
+                    author_name=author
+                )
+
+                if intent_res.get("is_spam"):
+                    return {
+                        "status": "rejected",
+                        "reason": "SPAM_OR_BAIT",
+                        "signals": intent_res.get("signals", []),
+                        "error": "Post identified as spam, promotional engagement-bait, or non-job content."
+                    }
+
+                if intent_res.get("intent") == "JOB_SEEKER":
+                    return {
+                        "status": "rejected",
+                        "reason": "JOB_SEEKER_POST",
+                        "intent": "JOB_SEEKER",
+                        "author_type": intent_res.get("author_type", "JOB_SEEKER"),
+                        "confidence": intent_res.get("confidence", 0.0),
+                        "signals": intent_res.get("signals", []),
+                        "error": "Post is from a job seeker / candidate looking for opportunities, not a hiring recruiter."
+                    }
+
+                if intent_res.get("intent") == "NON_HIRING":
+                    return {
+                        "status": "rejected",
+                        "reason": "NON_HIRING_CONTENT",
+                        "intent": "NON_HIRING",
+                        "confidence": intent_res.get("confidence", 0.0),
+                        "signals": intent_res.get("signals", []),
+                        "error": "Post is non-hiring content (advice, tutorial, webinar, or discussion)."
+                    }
+
                 # Emails & Phones
                 emails = sorted(set(re.findall(cls.EMAIL_REGEX, full_text)))
                 phones = sorted(set(re.findall(cls.PHONE_REGEX, full_text)))
@@ -283,7 +331,29 @@ class LinkedInPostExtractor:
                 role = role_match.group(1).strip() if role_match else (title_str.split("|")[0].strip() if title_str else "Software Engineer")
 
                 # =================================================
-                # 4. Resume Match & Outreach Pitches
+                # 5. Relevance Scoring & Post Quality
+                # =================================================
+                resolved_target_role = target_role or role
+                resolved_target_loc = target_location or "India"
+
+                role_score = RoleRelevanceMatcher.calculate_score(resolved_target_role, role, full_text)
+                loc_match_res = LocationRelevanceMatcher.match(resolved_target_loc, location, full_text)
+                exp_match_res = ExperienceRelevanceMatcher.match(candidate_exp_years if isinstance(candidate_exp_years, int) else 2, full_text)
+
+                quality_score = QualityScorer.calculate_quality_score(
+                    hiring_confidence=intent_res.get("confidence", 0.8),
+                    age_minutes=age_info["age_minutes"],
+                    max_age_minutes=max_age_minutes or 1440,
+                    role_score=role_score,
+                    location_score=loc_match_res.get("score", 100),
+                    experience_score=exp_match_res.get("score", 75),
+                    has_email=len(emails) > 0,
+                    has_phone=len(phones) > 0,
+                    has_apply_link=True
+                )
+
+                # =================================================
+                # 6. Resume Match & Outreach Pitches
                 # =================================================
                 match_data = {}
                 pitch_skills = skills
@@ -306,7 +376,7 @@ class LinkedInPostExtractor:
                 )
 
                 # =================================================
-                # 5. Guaranteed /posts/ Output Contract
+                # 7. Guaranteed /posts/ & Phase 2 Enriched Output Contract
                 # =================================================
                 result = {
                     "status": "success",
@@ -316,9 +386,20 @@ class LinkedInPostExtractor:
                     "age_hours": age_info["age_hours"],
                     "age_text": age_info["age_text"],
                     "author": author,
+                    "author_type": intent_res.get("author_type", "RECRUITER"),
                     "company": company,
                     "job_role": role,
                     "location": location,
+                    "location_match_type": loc_match_res.get("match_type", "EXACT"),
+                    "location_match_score": loc_match_res.get("score", 100),
+                    "role_match_score": role_score,
+                    "experience_match_score": exp_match_res.get("score", 75),
+                    "experience_fit": exp_match_res.get("fit", "UNKNOWN"),
+                    "hiring_intent": intent_res.get("intent", "HIRING"),
+                    "hiring_confidence": intent_res.get("confidence", 0.9),
+                    "hiring_signals": intent_res.get("signals", []),
+                    "post_quality_score": quality_score,
+                    "is_spam": False,
                     "recruiter_emails": emails,
                     "contact_numbers": phones,
                     "detected_skills": skills,
