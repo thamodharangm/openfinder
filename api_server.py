@@ -593,6 +593,14 @@ async def upload_resume_endpoint(file: UploadFile = File(...)) -> Dict[str, Any]
         Path(tmp_path).unlink(missing_ok=True)
 
 
+@app.post("/api/create-candidate-profile", tags=["Resume"])
+async def create_candidate_profile_endpoint(profile_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Creates or updates a persistent candidate profile from JSON (used by ChatGPT).
+    """
+    return service.create_candidate_profile(profile_data)
+
+
 @app.get("/api/candidate-profile/{profile_id}", tags=["Resume"])
 def get_candidate_profile_endpoint(profile_id: str) -> Dict[str, Any]:
     """
@@ -610,12 +618,15 @@ async def search_opportunities_endpoint(
     max_results: int = Query(10, description="Max opportunities (1-30)"),
     remote_only: bool = Query(False, description="Filter for remote roles"),
     candidate_profile_id: Optional[str] = Query(None, description="Optional candidate profile ID for ATS skill & experience fit"),
+    candidate_skills: Optional[str] = Query(None, description="Comma-separated candidate skills for instant ATS matching (e.g. 'React, Node.js, Express, MongoDB')"),
+    candidate_exp_years: Optional[int] = Query(None, description="Candidate total years of experience"),
+    candidate_name: Optional[str] = Query(None, description="Candidate name"),
     debug: bool = Query(False, description="Include funnel and latency metrics")
 ) -> Dict[str, Any]:
     """
     Canonical Opportunity Search endpoint.
     Searches verified LinkedIn hiring /posts/ with exact freshness validation,
-    directional hiring intent, and opportunity ranking against candidate profile.
+    directional hiring intent, and opportunity ranking against candidate profile or inline skills.
     """
     return await service.search_opportunities_async(
         query=query,
@@ -624,6 +635,9 @@ async def search_opportunities_endpoint(
         max_results=max_results,
         remote_only=remote_only,
         candidate_profile_id=candidate_profile_id,
+        candidate_skills=candidate_skills,
+        candidate_exp_years=candidate_exp_years,
+        candidate_name=candidate_name,
         debug=debug
     )
 

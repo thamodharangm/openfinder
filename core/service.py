@@ -80,6 +80,68 @@ class OpenFinderService:
                 except Exception:
                     pass
 
+    def create_candidate_profile(self, profile_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Creates or updates a persistent candidate profile from structured JSON (e.g. sent by ChatGPT).
+        """
+        try:
+            if not profile_data:
+                return {
+                    "status": "error",
+                    "reason": "EMPTY_PAYLOAD",
+                    "error": "profile_data cannot be empty."
+                }
+
+            # If raw skills list is passed as comma string, convert to list
+            skills = profile_data.get("skills") or profile_data.get("top_skills") or []
+            if isinstance(skills, str):
+                skills = [s.strip() for s in skills.split(",") if s.strip()]
+
+            name = profile_data.get("candidate_name") or profile_data.get("name") or "Candidate"
+            exp_years = profile_data.get("years_of_experience") or profile_data.get("experience_years") or 2
+            if isinstance(exp_years, str):
+                try:
+                    import re
+                    exp_years = int(re.search(r'\d+', exp_years).group(0))
+                except Exception:
+                    exp_years = 2
+
+            primary_role = profile_data.get("primary_role") or "Software Engineer"
+            target_roles = profile_data.get("target_roles") or [primary_role]
+            if isinstance(target_roles, str):
+                target_roles = [r.strip() for r in target_roles.split(",") if r.strip()]
+
+            profile_to_save = {
+                "candidate_name": name,
+                "email": profile_data.get("email"),
+                "phone": profile_data.get("phone"),
+                "years_of_experience": exp_years,
+                "seniority_level": profile_data.get("seniority_level") or ("Junior / Entry-Level" if exp_years <= 2 else "Mid-Level"),
+                "primary_role": primary_role,
+                "top_skills": skills,
+                "target_roles": target_roles,
+                "target_locations": profile_data.get("target_locations", ["India"])
+            }
+
+            pid = self.profile_store.save_profile(profile_to_save)
+            return {
+                "status": "success",
+                "candidate_profile_id": pid,
+                "candidate_name": name,
+                "seniority_level": profile_to_save["seniority_level"],
+                "years_of_experience": exp_years,
+                "primary_role": primary_role,
+                "top_skills": skills,
+                "target_roles": target_roles,
+                "message": "Candidate profile successfully stored. Use this candidate_profile_id in search queries."
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "reason": ErrorCodes.PARSER_ERROR,
+                "error": str(e)
+            }
+
     def get_candidate_profile(self, candidate_profile_id: str) -> Dict[str, Any]:
         """
         Retrieves a stored candidate profile by ID.
@@ -113,6 +175,9 @@ class OpenFinderService:
         remote_only: bool = False,
         candidate_profile_id: Optional[str] = None,
         candidate_profile: Optional[Dict[str, Any]] = None,
+        candidate_skills: Optional[Union[str, List[str]]] = None,
+        candidate_exp_years: Optional[int] = None,
+        candidate_name: Optional[str] = None,
         debug: bool = False
     ) -> Dict[str, Any]:
         """
@@ -129,6 +194,21 @@ class OpenFinderService:
         resolved_profile = candidate_profile
         if not resolved_profile and candidate_profile_id:
             resolved_profile = self.profile_store.get_profile(candidate_profile_id)
+
+        # Fallback to inline candidate skills if passed directly by ChatGPT
+        if not resolved_profile and candidate_skills:
+            if isinstance(candidate_skills, str):
+                parsed_skills = [s.strip() for s in candidate_skills.split(",") if s.strip()]
+            else:
+                parsed_skills = list(candidate_skills)
+            exp_val = candidate_exp_years or 2
+            resolved_profile = {
+                "candidate_name": candidate_name or "Candidate",
+                "top_skills": parsed_skills,
+                "years_of_experience": exp_val,
+                "seniority_level": "Mid-Level" if exp_val >= 2 else "Junior / Entry-Level (0-2 Years)",
+                "primary_role": clean_query
+            }
 
         try:
             max_age_min = get_max_age_minutes(timeframe)

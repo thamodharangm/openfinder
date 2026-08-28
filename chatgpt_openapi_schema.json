@@ -11,32 +11,48 @@
     }
   ],
   "paths": {
-    "/api/upload-resume": {
+    "/api/create-candidate-profile": {
       "post": {
-        "summary": "Upload and Parse Candidate PDF Resume",
-        "description": "Uploads candidate PDF resume, extracts structured skills, experience level, and target roles, stores a persistent candidate profile in SQLite, and returns a unique candidate_profile_id.",
-        "operationId": "uploadResume",
+        "summary": "Create or Save Candidate Profile from Resume Data",
+        "description": "Creates a persistent candidate profile from extracted resume text or skills, returning a unique candidate_profile_id.",
+        "operationId": "createCandidateProfile",
         "requestBody": {
           "required": true,
           "content": {
-            "multipart/form-data": {
+            "application/json": {
               "schema": {
                 "type": "object",
                 "properties": {
-                  "file": {
+                  "candidate_name": {
                     "type": "string",
-                    "format": "binary",
-                    "description": "Candidate PDF resume file"
+                    "description": "Candidate full name"
+                  },
+                  "skills": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "List of core technical skills (e.g. ['React.js', 'Node.js', 'Express.js', 'MongoDB', 'JavaScript'])"
+                  },
+                  "years_of_experience": {
+                    "type": "integer",
+                    "description": "Total years of experience (e.g. 1)"
+                  },
+                  "primary_role": {
+                    "type": "string",
+                    "description": "Target job title (e.g. 'MERN Stack Engineer')"
+                  },
+                  "target_roles": {
+                    "type": "array",
+                    "items": { "type": "string" }
                   }
                 },
-                "required": ["file"]
+                "required": ["skills"]
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Candidate profile successfully created",
+            "description": "Profile successfully created",
             "content": {
               "application/json": {
                 "schema": {
@@ -48,8 +64,148 @@
                     "seniority_level": { "type": "string" },
                     "years_of_experience": { "type": "integer" },
                     "primary_role": { "type": "string" },
-                    "top_skills": { "type": "array", "items": { "type": "string" } },
-                    "target_roles": { "type": "array", "items": { "type": "string" } }
+                    "top_skills": { "type": "array", "items": { "type": "string" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/search-opportunities": {
+      "get": {
+        "summary": "Search Verified LinkedIn Recruiter Hiring Opportunities",
+        "description": "Canonical search operation. Discovers verified genuine LinkedIn hiring /posts/ with exact freshness filters, directional hiring intent, and opportunity ranking against candidate profile or inline skills.",
+        "operationId": "searchOpportunities",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "default": "React Developer"
+            },
+            "description": "Job role or technical skill keywords (e.g. 'MERN Stack Developer', 'React Developer', 'Python Backend')"
+          },
+          {
+            "name": "location",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "India"
+            },
+            "description": "City or Region (e.g. 'Chennai', 'Bangalore', 'Remote', 'India')"
+          },
+          {
+            "name": "timeframe",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "past-24h",
+              "enum": ["past-1h", "past-4h", "past-12h", "past-24h", "past-7d"]
+            },
+            "description": "Exact freshness window: 'past-1h' (last 1 hr), 'past-4h', 'past-12h', 'past-24h', 'past-7d'"
+          },
+          {
+            "name": "max_results",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 5
+            },
+            "description": "Max opportunities to return (1-30)"
+          },
+          {
+            "name": "remote_only",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "Filter for remote roles only"
+          },
+          {
+            "name": "candidate_profile_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional stored candidate profile ID (e.g. 'prof_d0fbb15d5b15')"
+          },
+          {
+            "name": "candidate_skills",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional comma-separated skills for instant ATS matching (e.g. 'React, Node.js, Express, MongoDB, JavaScript')"
+          },
+          {
+            "name": "candidate_exp_years",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Candidate total years of experience (e.g. 1)"
+          },
+          {
+            "name": "candidate_name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Candidate full name"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of ranked verified hiring posts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "query": { "type": "string" },
+                    "location": { "type": "string" },
+                    "timeframe": { "type": "string" },
+                    "count": { "type": "integer" },
+                    "candidate_profile_id": { "type": "string" },
+                    "candidate_name": { "type": "string" },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "company": { "type": "string" },
+                          "role": { "type": "string" },
+                          "author": { "type": "string" },
+                          "author_type": { "type": "string" },
+                          "location": { "type": "string" },
+                          "posted_time": { "type": "string" },
+                          "hiring_intent": { "type": "string" },
+                          "post_quality_score": { "type": "integer" },
+                          "candidate_match_score": { "type": "integer", "nullable": true },
+                          "final_rank_score": { "type": "integer" },
+                          "ranking_summary": { "type": "string" },
+                          "ranking_reasons": { "type": "array", "items": { "type": "string" } },
+                          "recruiter_emails": { "type": "array", "items": { "type": "string" } },
+                          "skills": { "type": "array", "items": { "type": "string" } },
+                          "matched_skills": { "type": "array", "items": { "type": "string" } },
+                          "post_url": { "type": "string" }
+                        }
+                      }
+                    }
                   }
                 }
               }
@@ -71,7 +227,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Unique candidate profile ID (e.g. 'prof_a1b2c3d4e5f6')"
+            "description": "Unique candidate profile ID"
           }
         ],
         "responses": {
@@ -84,120 +240,6 @@
                   "properties": {
                     "status": { "type": "string" },
                     "candidate_profile": { "type": "object" }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/search-opportunities": {
-      "get": {
-        "summary": "Search Verified LinkedIn Recruiter Hiring Opportunities",
-        "description": "Canonical search operation. Discovers verified genuine LinkedIn hiring /posts/ with exact freshness filters, directional hiring intent, and opportunity ranking against candidate profile.",
-        "operationId": "searchOpportunities",
-        "parameters": [
-          {
-            "name": "query",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "default": "React Developer"
-            },
-            "description": "Job role or technical skill keywords (e.g. 'React Developer', 'MERN Stack', 'Python Backend')"
-          },
-          {
-            "name": "location",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "India"
-            },
-            "description": "City or Region (e.g. 'Bangalore', 'Chennai', 'Remote', 'India')"
-          },
-          {
-            "name": "timeframe",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "past-24h",
-              "enum": ["past-1h", "past-4h", "past-12h", "past-24h", "past-7d"]
-            },
-            "description": "Exact freshness window: 'past-1h' (last 1 hr), 'past-4h' (4 hrs), 'past-12h' (12 hrs), 'past-24h' (24 hrs), or 'past-7d' (7 days)"
-          },
-          {
-            "name": "max_results",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "default": 10
-            },
-            "description": "Max opportunities to return (1-30)"
-          },
-          {
-            "name": "remote_only",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": false
-            },
-            "description": "Filter for remote roles only"
-          },
-          {
-            "name": "candidate_profile_id",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Optional stored candidate profile ID for ATS skill and experience fit ranking"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "List of ranked verified hiring posts",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "status": { "type": "string" },
-                    "query": { "type": "string" },
-                    "location": { "type": "string" },
-                    "timeframe": { "type": "string" },
-                    "count": { "type": "integer" },
-                    "candidate_profile_id": { "type": "string" },
-                    "results": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "company": { "type": "string" },
-                          "role": { "type": "string" },
-                          "author": { "type": "string" },
-                          "author_type": { "type": "string" },
-                          "location": { "type": "string" },
-                          "posted_time": { "type": "string" },
-                          "age_minutes": { "type": "integer" },
-                          "hiring_intent": { "type": "string" },
-                          "post_quality_score": { "type": "integer" },
-                          "candidate_match_score": { "type": "integer", "nullable": true },
-                          "final_rank_score": { "type": "integer" },
-                          "ranking_summary": { "type": "string" },
-                          "ranking_reasons": { "type": "array", "items": { "type": "string" } },
-                          "recruiter_emails": { "type": "array", "items": { "type": "string" } },
-                          "contact_numbers": { "type": "array", "items": { "type": "string" } },
-                          "skills": { "type": "array", "items": { "type": "string" } },
-                          "post_url": { "type": "string" }
-                        }
-                      }
-                    }
                   }
                 }
               }
@@ -254,13 +296,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "status": { "type": "string" },
-                    "job_title": { "type": "string" },
-                    "company": { "type": "string" },
-                    "pitches": { "type": "object" }
-                  }
+                  "type": "object"
                 }
               }
             }
