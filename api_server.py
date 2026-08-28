@@ -404,12 +404,49 @@ async def mcp_message_handler(request: Request):
         tool_name = params.get("name")
         args = params.get("arguments", {})
 
-        if tool_name == "search_posts":
+        if tool_name == "search_opportunities":
+            query = args.get("query", "React Developer")
+            location = args.get("location", "India")
+            timeframe = args.get("timeframe", "past-24h")
+            max_results = args.get("max_results", 10)
+            remote_only = args.get("remote_only", False)
+            candidate_profile_id = args.get("candidate_profile_id")
+            candidate_skills = args.get("candidate_skills")
+            candidate_exp_years = args.get("candidate_exp_years")
+            candidate_name = args.get("candidate_name")
+
+            res = await service.search_opportunities_async(
+                query=query,
+                location=location,
+                timeframe=timeframe,
+                max_results=max_results,
+                remote_only=remote_only,
+                candidate_profile_id=candidate_profile_id,
+                candidate_skills=candidate_skills,
+                candidate_exp_years=candidate_exp_years,
+                candidate_name=candidate_name
+            )
+
+            response_payload = {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(res, indent=2)
+                        }
+                    ]
+                }
+            }
+
+        elif tool_name == "search_posts":
             keywords = args.get("keywords", "React Developer hiring")
-            date_posted = args.get("date_posted", "past-week")
+            date_posted = args.get("date_posted", "past-24h")
             max_results = args.get("max_results", 10)
 
-            posts = linkedin_finder.search_posts(
+            posts = await asyncio.to_thread(
+                linkedin_finder.search_posts,
                 keywords=keywords,
                 date_posted=date_posted,
                 max_results=max_results
@@ -436,13 +473,14 @@ async def mcp_message_handler(request: Request):
             cand_profile = None
             if c_name != "Candidate" or c_exp > 0:
                 cand_profile = {
-                    "name": c_name,
-                    "experience_years": c_exp,
-                    "skills": [],
+                    "candidate_name": c_name,
+                    "years_of_experience": c_exp,
+                    "top_skills": [],
                     "target_roles": []
                 }
 
-            post_data = LinkedInPostExtractor.extract_from_url(
+            post_data = await asyncio.to_thread(
+                LinkedInPostExtractor.extract_from_url,
                 url=post_url,
                 candidate_profile=cand_profile
             )
@@ -463,45 +501,19 @@ async def mcp_message_handler(request: Request):
         elif tool_name == "search_hiring_posts":
             keywords = args.get("keywords", "React Developer")
             location = args.get("location", "India")
-            max_results = args.get("max_results", 10)
-
-            posts = linkedin_finder.search_hiring_posts(
-                keywords=keywords,
-                location=location,
-                timeframe="w",
-                max_results=max_results
-            )
-            table = LinkedInFinder.format_as_markdown_table(posts)
-
-            response_payload = {
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": json.dumps({"status": "success", "count": len(posts), "markdown_table": table, "posts": posts}, indent=2)
-                        }
-                    ]
-                }
-            }
-
-        elif tool_name == "search_opportunities":
-            query = args.get("query", "React Developer")
-            location = args.get("location", "India")
             timeframe = args.get("timeframe", "past-24h")
             max_results = args.get("max_results", 10)
-            remote_only = args.get("remote_only", False)
-            candidate_profile_id = args.get("candidate_profile_id")
 
             res = await service.search_opportunities_async(
-                query=query,
+                query=keywords,
                 location=location,
                 timeframe=timeframe,
-                max_results=max_results,
-                remote_only=remote_only,
-                candidate_profile_id=candidate_profile_id
+                max_results=max_results
             )
+
+            table = ""
+            if res.get("results"):
+                table = LinkedInFinder.format_as_markdown_table(res["results"])
 
             response_payload = {
                 "jsonrpc": "2.0",
@@ -510,7 +522,12 @@ async def mcp_message_handler(request: Request):
                     "content": [
                         {
                             "type": "text",
-                            "text": json.dumps(res, indent=2)
+                            "text": json.dumps({
+                                "status": "success",
+                                "count": res.get("count", 0),
+                                "markdown_table": table,
+                                "results": res.get("results", [])
+                            }, indent=2)
                         }
                     ]
                 }
