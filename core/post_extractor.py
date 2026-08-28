@@ -1,6 +1,7 @@
 import re
 import urllib.parse
 from typing import Dict, Any, Optional, List
+from datetime import datetime, timezone, timedelta
 import httpx
 from bs4 import BeautifulSoup
 import sys
@@ -16,8 +17,8 @@ from core.matcher import JobMatcher
 
 class LinkedInPostExtractor:
     """
-    Extracts structured hiring intelligence ONLY from genuine LinkedIn /posts/ URLs.
-    All other LinkedIn URL types are rejected.
+    Extracts structured hiring intelligence ONLY from genuine LinkedIn /posts/ URLs
+    AND validates exact publication time down to the minute.
     """
 
     HEADERS = {
@@ -36,74 +37,148 @@ class LinkedInPostExtractor:
     EMAIL_REGEX = r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+"
     PHONE_REGEX = r"(?:\+91[\-\s]?)?[6789]\d{9}"
 
-    # ---------------------------------------------------------
-    # ONLY /posts/ URL validation
-    # ---------------------------------------------------------
+    # =========================================================
+    # 1. ONLY /posts/ URLs
+    # =========================================================
     @staticmethod
     def is_valid_post_url(url: str) -> bool:
-        """
-        Accept ONLY:
-            https://www.linkedin.com/posts/... (or *.linkedin.com/posts/...)
-
-        Reject:
-            /jobs/
-            /jobs/view/
-            /feed/update/
-            /activity-
-            /company/
-            /pulse/
-            /learning/
-            /school/
-            /salary/
-            /directory/
-            lnkd.in/p/
-            any non-LinkedIn URL
-        """
         if not url:
             return False
 
         clean_url = url.split("?")[0].strip()
         parsed = urllib.parse.urlparse(clean_url)
 
-        # Must be LinkedIn (including all subdomains like in.linkedin.com, www.linkedin.com)
+        # Only LinkedIn (support all subdomains like in.linkedin.com, www.linkedin.com)
         hostname = parsed.netloc.lower()
         if hostname != "linkedin.com" and not hostname.endswith(".linkedin.com"):
             return False
 
-        # Path MUST start with /posts/
-        path = parsed.path.rstrip("/")
-        if not path.lower().startswith("/posts/"):
+        # ONLY /posts/
+        if not parsed.path.lower().startswith("/posts/"):
             return False
 
-        # Must contain something after /posts/
-        post_slug = path[len("/posts/"):].strip("/")
+        # Must contain slug after /posts/
+        post_slug = parsed.path[len("/posts/"):].strip("/")
         if not post_slug:
             return False
 
-        # Explicitly reject other URL patterns
-        forbidden_patterns = [
-            "/jobs/",
-            "/job/",
-            "/jobs/view/",
-            "/feed/update/",
-            "/company/",
-            "/pulse/",
-            "/learning/",
-            "/school/",
-            "/salary/",
-            "/directory/",
-            "/activity-",
+        # Explicitly reject non-post paths
+        forbidden = [
+            "/jobs/", "/job/", "/jobs/view/", "/company/",
+            "/pulse/", "/learning/", "/school/", "/salary/",
+            "/directory/", "/feed/update/", "/activity-"
         ]
-
-        url_lower = clean_url.lower()
-        if any(pattern in url_lower for pattern in forbidden_patterns):
+        if any(f in clean_url.lower() for f in forbidden):
             return False
 
         return True
 
-    # ---------------------------------------------------------
-    # Normalize skills
-    # ---------------------------------------------------------
+    # =========================================================
+    # 2. Extract actual publication datetime
+    # =========================================================
+    @classmethod
+    def extract_published_datetime(cls, soup: BeautifulSoup, url: str = "") -> Optional[datetime]:
+        """
+        Extracts exact publication timestamp from JSON-LD schema,
+        HTML metadata tags, and URL snowflake activity ID.
+        """
+        candidates = []
+
+        # -----------------------------------------------------
+        # JSON-LD (Primary & Most Accurate for LinkedIn)
+        # -----------------------------------------------------
+        for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
+            text = script.get_text(strip=True)
+            for key in ["datePublished", "dateCreated", "uploadDate"]:
+                match = re.search(rf'"{key}"\s*:\s*"([^"]+)"', text, re.IGNORECASE)
+                if match:
+                    candidates.append(match.group(1))
+
+        # -----------------------------------------------------
+        # <meta property="article:published_time">
+        # -----------------------------------------------------
+        meta_published = soup.find("meta", attrs={"property": "article:published_time"})
+        if meta_published and meta_published.get("content"):
+            candidates.append(meta_published.get("content"))
+
+        # -----------------------------------------------------
+        # <meta name="date">
+        # -----------------------------------------------------
+        meta_date = soup.find("meta", attrs={"name": "date"})
+        if meta_date and meta_date.get("content"):
+            candidates.append(meta_date.get("content"))
+
+        # -----------------------------------------------------
+        # <time datetime="...">
+        # -----------------------------------------------------
+        for time_tag in soup.find_all("time"):
+            val = time_tag.get("datetime")
+            if val:
+                candidates.append(val)
+
+        # Parse collected ISO string candidates
+        for value in candidates:
+            try:
+                val = value.strip()
+                if val.endswith("Z"):
+                    val = val[:-1] + "+00:00"
+                dt = datetime.fromisoformat(val)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.astimezone(timezone.utc)
+            except (ValueError, TypeError):
+                continue
+
+        # -----------------------------------------------------
+        # Snowflake Activity ID Fallback (Fail-safe 64-bit TS)
+        # -----------------------------------------------------
+        if url:
+            match = re.search(r'(?:activity|share)[:-](\d{15,})', url)
+            if match:
+                aid = int(match.group(1))
+                ts_sec = (aid >> 22) / 1000.0
+                return datetime.fromtimestamp(ts_sec, tz=timezone.utc)
+
+        return None
+
+    # =========================================================
+    # 3. Check post age
+    # =========================================================
+    @staticmethod
+    def get_post_age(published_at: datetime, max_age_hours: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        now = datetime.now(timezone.utc)
+        age = now - published_at
+
+        # Future timestamp = invalid
+        if age.total_seconds() < 0:
+            return None
+
+        # Filter by max_age_hours if specified
+        if max_age_hours is not None and age >= timedelta(hours=max_age_hours):
+            return None
+
+        total_minutes = int(age.total_seconds() // 60)
+        hours = total_minutes // 60
+        minutes = total_minutes % 60
+
+        if hours < 1:
+            age_text = f"{minutes}m ago"
+        elif hours < 24:
+            age_text = f"{hours}h {minutes}m ago"
+        else:
+            days = hours // 24
+            age_text = f"{days}d {hours % 24}h ago"
+
+        return {
+            "age_hours": hours,
+            "age_minutes": minutes,
+            "age_text": age_text,
+            "published_at_utc": published_at.isoformat(),
+        }
+
+    # =========================================================
+    # 4. Normalize skills
+    # =========================================================
     @staticmethod
     def normalize_skills(skills: List[str]) -> List[str]:
         mapping = {
@@ -148,37 +223,37 @@ class LinkedInPostExtractor:
 
         return sorted(normalized)
 
-    # ---------------------------------------------------------
-    # Extract company
-    # ---------------------------------------------------------
+    # =========================================================
+    # 5. Company extraction
+    # =========================================================
     @staticmethod
     def extract_company(
         text: str,
         emails: List[str],
         author: str
     ) -> str:
-        # Try email domain first
+        ignored_domains = {
+            "gmail",
+            "yahoo",
+            "outlook",
+            "hotmail",
+            "proton",
+            "icloud",
+            "rediffmail",
+        }
+
         for email in emails:
             domain = email.split("@")[-1].split(".")[0].lower()
-            ignored_domains = {
-                "gmail",
-                "yahoo",
-                "outlook",
-                "hotmail",
-                "proton",
-                "icloud",
-                "rediffmail",
-            }
             if domain not in ignored_domains:
                 return domain.capitalize()
 
-        comp_patterns = [
+        patterns = [
             r"(?:at|@)\s+([A-Z][a-zA-Z0-9&]+)",
             r"company\s*:\s*([A-Za-z0-9& ]+)",
             r"hiring\s+(?:for\s+)([A-Z][a-zA-Z0-9&]+)",
         ]
 
-        for pattern in comp_patterns:
+        for pattern in patterns:
             match = re.search(pattern, text)
             if match:
                 company = match.group(1).strip()
@@ -198,9 +273,9 @@ class LinkedInPostExtractor:
 
         return "the Hiring Team"
 
-    # ---------------------------------------------------------
-    # Extract ONLY genuine /posts/ URL
-    # ---------------------------------------------------------
+    # =========================================================
+    # 6. Main extractor
+    # =========================================================
     @classmethod
     def extract_from_url(
         cls,
@@ -209,64 +284,33 @@ class LinkedInPostExtractor:
         candidate_profile: Optional[Dict[str, Any]] = None,
         candidate_name: str = "Candidate",
         candidate_exp_years: int = 2,
+        max_age_hours: Optional[int] = None,
     ) -> Dict[str, Any]:
 
-        # =====================================================
-        # STRICT /posts/ VALIDATION
-        # =====================================================
         clean_url = url.split("?")[0].strip()
 
-        # If it's an internal activity link being resolved, fetch to get canonical /posts/ URL
+        # -----------------------------------------------------
+        # STRICT URL CHECK
+        # -----------------------------------------------------
         is_internal_activity = bool("/feed/update/" in clean_url or "urn:li:activity:" in clean_url)
-        
         if not cls.is_valid_post_url(clean_url) and not is_internal_activity:
             return {
                 "status": "rejected",
-                "error": (
-                    "Invalid LinkedIn URL. "
-                    "ONLY genuine /posts/ URLs are accepted."
-                ),
-                "accepted_format": (
-                    "https://www.linkedin.com/posts/..."
-                ),
-                "rejected_types": [
-                    "/jobs/",
-                    "/jobs/view/",
-                    "/feed/update/",
-                    "/activity-",
-                    "/company/",
-                    "/pulse/",
-                    "/learning/",
-                    "/school/",
-                    "/salary/",
-                    "/directory/",
-                    "lnkd.in/p/",
-                ],
+                "reason": "NOT_A_LINKEDIN_POST",
+                "error": "Only https://www.linkedin.com/posts/... URLs are accepted.",
             }
 
         skills_taxonomy = skills_taxonomy or COMMON_SKILLS
 
         # Candidate profile
         if candidate_profile:
-            candidate_name = candidate_profile.get(
-                "candidate_name",
-                candidate_name
-            )
-            candidate_exp_years = candidate_profile.get(
-                "years_of_experience",
-                candidate_exp_years
-            )
-            cand_skills = candidate_profile.get(
-                "top_skills",
-                []
-            )
+            candidate_name = candidate_profile.get("candidate_name", candidate_name)
+            candidate_exp_years = candidate_profile.get("years_of_experience", candidate_exp_years)
+            cand_skills = candidate_profile.get("top_skills", [])
         else:
             cand_skills = []
 
         try:
-            # =================================================
-            # Fetch URL
-            # =================================================
             with httpx.Client(
                 headers=cls.HEADERS,
                 timeout=12.0,
@@ -277,62 +321,53 @@ class LinkedInPostExtractor:
                 if response.status_code != 200:
                     return {
                         "status": "error",
-                        "error": (
-                            f"Failed to fetch LinkedIn post "
-                            f"(HTTP {response.status_code})"
-                        ),
+                        "reason": "FETCH_FAILED",
+                        "error": f"HTTP {response.status_code}",
                     }
 
-                soup = BeautifulSoup(
-                    response.text,
-                    "html.parser"
-                )
+                soup = BeautifulSoup(response.text, "html.parser")
+
+                # =================================================
+                # Publication Timestamp Validation
+                # =================================================
+                published_at = cls.extract_published_datetime(soup, url=clean_url)
+                if published_at is None:
+                    return {
+                        "status": "rejected",
+                        "reason": "PUBLISHED_TIME_NOT_FOUND",
+                        "error": "Could not verify the post publication time.",
+                    }
+
+                # Post Age Filter
+                age_info = cls.get_post_age(published_at, max_age_hours=max_age_hours)
+                if age_info is None:
+                    return {
+                        "status": "rejected",
+                        "reason": "EXCEEDED_MAX_AGE",
+                        "published_at_utc": published_at.isoformat(),
+                        "error": f"Post exceeds maximum age limit ({max_age_hours}h)." if max_age_hours else "Invalid post age.",
+                    }
 
                 # =================================================
                 # Metadata
                 # =================================================
-                og_title = soup.find(
-                    "meta",
-                    property="og:title"
-                )
-                og_desc = soup.find(
-                    "meta",
-                    property="og:description"
-                )
-                og_url = soup.find(
-                    "meta",
-                    property="og:url"
-                )
-                canonical_tag = soup.find(
-                    "link",
-                    rel="canonical"
-                )
+                og_title = soup.find("meta", property="og:title")
+                og_desc = soup.find("meta", property="og:description")
+                og_url = soup.find("meta", property="og:url")
+                canonical_tag = soup.find("link", rel="canonical")
 
-                title_str = (
-                    og_title.get("content", "").strip()
-                    if og_title
-                    else ""
-                )
-
-                full_text = (
-                    og_desc.get("content", "").strip()
-                    if og_desc
-                    else soup.get_text(" ", strip=True)
-                )
+                title_str = og_title.get("content", "").strip() if og_title else ""
+                full_text = og_desc.get("content", "").strip() if og_desc else soup.get_text(" ", strip=True)
 
                 # =================================================
-                # Resolve final URL
-                # BUT FINAL URL MUST ALWAYS BE /posts/
+                # FINAL URL (STRICT /posts/ ONLY)
                 # =================================================
                 canonical_url = ""
                 if og_url and og_url.get("content"):
-                    canonical_url = og_url.get("content").strip()
+                    canonical_url = og_url.get("content").strip().split("?")[0]
                 elif canonical_tag and canonical_tag.get("href"):
-                    canonical_url = canonical_tag.get("href").strip()
+                    canonical_url = canonical_tag.get("href").strip().split("?")[0]
 
-                canonical_url = canonical_url.split("?")[0]
-
-                # Prefer canonical only if canonical is /posts/
                 if cls.is_valid_post_url(canonical_url):
                     final_post_url = canonical_url
                 elif cls.is_valid_post_url(clean_url):
@@ -340,10 +375,8 @@ class LinkedInPostExtractor:
                 else:
                     return {
                         "status": "rejected",
-                        "error": (
-                            "Resolved URL is not a genuine "
-                            "LinkedIn /posts/ URL."
-                        ),
+                        "reason": "INVALID_FINAL_URL",
+                        "error": "Resolved URL is not a genuine LinkedIn /posts/ URL.",
                     }
 
                 # =================================================
@@ -354,158 +387,74 @@ class LinkedInPostExtractor:
                     author = title_str.split("|")[-1].strip()
 
                 # =================================================
-                # Emails
+                # Emails & Phones
                 # =================================================
-                emails = sorted(set(
-                    re.findall(
-                        cls.EMAIL_REGEX,
-                        full_text
-                    )
-                ))
-
-                # =================================================
-                # Phones
-                # =================================================
-                phones = sorted(set(
-                    re.findall(
-                        cls.PHONE_REGEX,
-                        full_text
-                    )
-                ))
+                emails = sorted(set(re.findall(cls.EMAIL_REGEX, full_text)))
+                phones = sorted(set(re.findall(cls.PHONE_REGEX, full_text)))
 
                 # =================================================
                 # Skills
                 # =================================================
-                text_lower = (
-                    full_text + " " + title_str
-                ).lower()
-
+                text_lower = (full_text + " " + title_str).lower()
                 raw_skills = []
                 for skill in skills_taxonomy:
-                    pattern = (
-                        r"(?:\b|\W)"
-                        + re.escape(skill.lower())
-                        + r"(?:\b|\W)"
-                    )
-                    if re.search(
-                        pattern,
-                        text_lower
-                    ):
+                    if re.search(r"(?:\b|\W)" + re.escape(skill.lower()) + r"(?:\b|\W)", text_lower):
                         raw_skills.append(skill)
-
-                skills = cls.normalize_skills(
-                    raw_skills
-                )
+                skills = cls.normalize_skills(raw_skills)
 
                 # =================================================
-                # Company
+                # Company & Location
                 # =================================================
-                company = cls.extract_company(
-                    full_text,
-                    emails,
-                    author
-                )
-
-                # =================================================
-                # Location
-                # =================================================
-                loc_match = re.search(
-                    r"(?:📍\s*location|location|city|in)"
-                    r"\s*:\s*([A-Za-z\s]+)",
-                    full_text,
-                    re.IGNORECASE
-                )
-
-                location = (
-                    loc_match.group(1).strip()
-                    if loc_match
-                    else "Unspecified / Remote"
-                )
+                company = cls.extract_company(full_text, emails, author)
+                loc_match = re.search(r"(?:📍\s*location|location|city|in)\s*:\s*([A-Za-z\s]+)", full_text, re.IGNORECASE)
+                location = loc_match.group(1).strip() if loc_match else "Unspecified / Remote"
 
                 # =================================================
                 # Role
                 # =================================================
-                role_match = re.search(
-                    r"hiring\s+(?:for\s+)?"
-                    r"([^\n!.,#]+)",
-                    full_text,
-                    re.IGNORECASE
-                )
-
-                role = (
-                    role_match.group(1).strip()
-                    if role_match
-                    else (
-                        title_str.split("|")[0].strip()
-                        if title_str
-                        else "Software Engineer"
-                    )
-                )
+                role_match = re.search(r"hiring\s+(?:for\s+)?([^\n!.,#]+)", full_text, re.IGNORECASE)
+                role = role_match.group(1).strip() if role_match else (title_str.split("|")[0].strip() if title_str else "Software Engineer")
 
                 # =================================================
                 # Resume Match
                 # =================================================
                 match_data = {}
                 pitch_skills = skills
-
                 if cand_skills:
-                    match_data = (
-                        JobMatcher.calculate_weighted_match(
-                            candidate_skills=cand_skills,
-                            candidate_exp_years=(
-                                candidate_exp_years
-                                if isinstance(
-                                    candidate_exp_years,
-                                    int
-                                )
-                                else 2
-                            ),
-                            required_skills=skills,
-                            experience_required_str=full_text,
-                        )
+                    match_data = JobMatcher.calculate_weighted_match(
+                        candidate_skills=cand_skills,
+                        candidate_exp_years=candidate_exp_years if isinstance(candidate_exp_years, int) else 2,
+                        required_skills=skills,
+                        experience_required_str=full_text,
                     )
-
-                    pitch_skills = (
-                        match_data.get("matched_skills")
-                        or skills
-                    )
+                    pitch_skills = match_data.get("matched_skills") or skills
 
                 # =================================================
                 # Outreach Pitches
                 # =================================================
-                pitches = (
-                    OutreachPitchGenerator.generate_suite(
-                        job_title=role,
-                        company_name=company,
-                        matched_skills=(
-                            pitch_skills
-                            if pitch_skills
-                            else ["Full Stack Development"]
-                        ),
-                        candidate_name=candidate_name,
-                        candidate_exp_years=(
-                            candidate_exp_years
-                            if isinstance(
-                                candidate_exp_years,
-                                int
-                            )
-                            else 2
-                        ),
-                        recipient_name=author,
-                    )
+                pitches = OutreachPitchGenerator.generate_suite(
+                    job_title=role,
+                    company_name=company,
+                    matched_skills=pitch_skills if pitch_skills else ["Full Stack Development"],
+                    candidate_name=candidate_name,
+                    candidate_exp_years=candidate_exp_years if isinstance(candidate_exp_years, int) else 2,
+                    recipient_name=author,
                 )
 
                 # =================================================
-                # Final result
+                # SUCCESS RESULT
                 # =================================================
                 result = {
                     "status": "success",
-                    # GUARANTEED /posts/ ONLY
                     "post_url": final_post_url,
                     "author": author,
                     "company": company,
                     "job_role": role,
                     "location": location,
+                    "published_at": published_at.isoformat(),
+                    "post_age": age_info["age_text"],
+                    "age_hours": age_info["age_hours"],
+                    "age_minutes": age_info["age_minutes"],
                     "recruiter_emails": emails,
                     "contact_numbers": phones,
                     "detected_skills": skills,
@@ -521,7 +470,8 @@ class LinkedInPostExtractor:
         except Exception as exc:
             return {
                 "status": "error",
-                "error": f"Error parsing post: {str(exc)}",
+                "reason": "PARSER_ERROR",
+                "error": str(exc),
             }
 
 
@@ -529,22 +479,12 @@ class LinkedInPostExtractor:
 # TEST
 # =============================================================
 if __name__ == "__main__":
-    test_urls = [
-        # ✅ ACCEPT
-        "https://www.linkedin.com/posts/siva-raja-lingam-12ab4a223_we-are-hiring-egrove-systems-is-looking-activity-7498493404704591873-1z9G",
-
-        # ❌ REJECT
-        "https://www.linkedin.com/jobs/view/123456789",
-        "https://www.linkedin.com/company/example/",
-        "https://www.linkedin.com/pulse/example-post/",
-        "https://lnkd.in/p/abcdef",
-    ]
-
-    for test_url in test_urls:
-        print("\n" + "=" * 80)
-        print("URL:", test_url)
-
-        result = LinkedInPostExtractor.extract_from_url(test_url)
-        print("STATUS:", result.get("status"))
-        print("POST URL:", result.get("post_url"))
-        print("ERROR:", result.get("error"))
+    test_url = "https://www.linkedin.com/posts/siva-raja-lingam-12ab4a223_we-are-hiring-egrove-systems-is-looking-activity-7498493404704591873-1z9G"
+    print("Testing post extractor with timestamp analysis on:", test_url)
+    res = LinkedInPostExtractor.extract_from_url(test_url)
+    print("\nStatus:", res.get("status"))
+    print("Post Age:", res.get("post_age"))
+    print("Published At:", res.get("published_at"))
+    print("Company:", res.get("company"))
+    print("Role:", res.get("job_role"))
+    print("Post URL:", res.get("post_url"))
