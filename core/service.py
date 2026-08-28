@@ -227,6 +227,11 @@ class OpenFinderService:
         )
 
         if not raw_posts:
+            session_valid = LinkedInSessionSearch.check_session_health().get("valid", False)
+            diag_msg = "No verified matching hiring posts found in the requested timeframe."
+            if not session_valid:
+                diag_msg += " (Tip: Configure LINKEDIN_LI_AT environment variable on Render for direct LinkedIn API discovery)."
+
             return {
                 "status": "success",
                 "query": clean_query,
@@ -234,8 +239,9 @@ class OpenFinderService:
                 "timeframe": timeframe,
                 "count": 0,
                 "candidate_profile_id": candidate_profile_id,
+                "session_authenticated": session_valid,
                 "results": [],
-                "message": "No verified matching hiring posts found in the requested timeframe."
+                "message": diag_msg
             }
 
         # Multi-signal opportunity ranking & soft company diversity

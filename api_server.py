@@ -525,14 +525,14 @@ async def mcp_message_handler(request: Request):
             keywords = args.get("keywords", "React Developer")
             location = args.get("location", "India")
             timeframe = args.get("timeframe", "past-24h")
-            max_results = args.get("max_results", 10)
-
+            logger.info(f"🔍 [MCP search_hiring_posts] query='{keywords}', location='{location}', timeframe='{timeframe}', max={max_results}")
             res = await service.search_opportunities_async(
                 query=keywords,
                 location=location,
                 timeframe=timeframe,
                 max_results=max_results
             )
+            logger.info(f"📊 [MCP search_hiring_posts] Found {res.get('count', 0)} posts")
 
             table = ""
             if res.get("results"):

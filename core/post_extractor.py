@@ -368,12 +368,22 @@ class LinkedInPostExtractor:
         target_role: Optional[str] = None,
         target_location: Optional[str] = None,
         max_age_minutes: Optional[int] = None,
+        timeframe: Optional[str] = None,
         candidate_profile: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Asynchronously extracts structured hiring intelligence from a LinkedIn /posts/ URL.
         Features connection reuse, transient error retries, and bounded timeouts.
         """
+        if timeframe and not max_age_minutes:
+            try:
+                max_age_minutes = get_max_age_minutes(timeframe)
+            except ValueError:
+                return {
+                    "status": "rejected",
+                    "reason": "INVALID_TIMEFRAME",
+                    "error": f"Invalid timeframe '{timeframe}'."
+                }
         norm_url = normalize_linkedin_post_url(url)
         if not norm_url:
             return {
@@ -542,11 +552,21 @@ class LinkedInPostExtractor:
         target_role: Optional[str] = None,
         target_location: Optional[str] = None,
         max_age_minutes: Optional[int] = None,
+        timeframe: Optional[str] = None,
         candidate_profile: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Synchronous entrypoint. Preserves backward compatibility.
         """
+        if timeframe and not max_age_minutes:
+            try:
+                max_age_minutes = get_max_age_minutes(timeframe)
+            except ValueError:
+                return {
+                    "status": "rejected",
+                    "reason": "INVALID_TIMEFRAME",
+                    "error": f"Invalid timeframe '{timeframe}'."
+                }
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
