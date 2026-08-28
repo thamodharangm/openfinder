@@ -69,7 +69,10 @@ class OutreachPitchGenerator:
         )
 
         return {
+            "connection_note": connection_note,
+            "linkedin_connection_note": connection_note,
             "linkedin_connection_note_300_chars": connection_note,
+            "linkedin_dm": linkedin_dm,
             "linkedin_inmail_dm": linkedin_dm,
             "formal_cover_email": formal_email,
             "day3_follow_up": follow_up
