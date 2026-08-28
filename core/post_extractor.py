@@ -108,6 +108,12 @@ class LinkedInPostExtractor:
         """
         skills_taxonomy = skills_taxonomy or COMMON_SKILLS
         clean_url = url.split("?")[0].strip()
+        url_lower = clean_url.lower()
+
+        # STRICT VALIDATION: Reject any corporate job board /jobs/view/ aggregator links
+        forbidden_patterns = ['/jobs/', '/job/', '/directory/', '/salary/', '/school/', '/learning/', '/pulse/', '/company/', 'jobs/view', '/jobs/view/']
+        if any(f in url_lower for f in forbidden_patterns) or ('/posts/' not in url_lower and '/feed/update/' not in url_lower and 'activity-' not in url_lower and 'lnkd.in/p/' not in url_lower):
+            return {"error": "Invalid URL: Only genuine personal recruiter/founder hiring posts (/posts/ or /feed/update/) are allowed. Corporate job board aggregator listings (/jobs/view/) are completely rejected."}
 
         # If candidate_profile passed, extract candidate info
         if candidate_profile:

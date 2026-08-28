@@ -138,6 +138,11 @@ class LinkedInSessionSearch:
             if len(results) >= max_results:
                 break
 
+            # STRICT BAN on corporate job boards /jobs/view/ and non-post links
+            p_lower = p_url.lower()
+            if any(f in p_lower for f in ['/jobs/', '/job/', '/directory/', '/company/', 'jobs/view']):
+                continue
+
             # STRICT SNOWFLAKE TIMESTAMP FILTER: Drop any post outside target timeframe
             ts = cls.get_post_timestamp(p_url)
             posted_human = "Recently"

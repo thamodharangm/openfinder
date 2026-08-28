@@ -45,8 +45,12 @@ class LinkedInFinder:
         if "linkedin.com" not in url_lower and "lnkd.in" not in url_lower:
             return False
 
-        # Strictly BAN any job aggregator / corporate board links
-        forbidden_patterns = ['/jobs/', '/job/', '/directory/', '/salary/', '/school/', '/learning/', '/pulse/', '/company/']
+        # Strictly BAN any job aggregator / corporate board links (/jobs/, /jobs/view/, etc.)
+        forbidden_patterns = [
+            '/jobs/', '/job/', '/jobs/view', 'jobs/view', '/directory/', 
+            '/salary/', '/school/', '/learning/', '/pulse/', '/company/',
+            'linkedin.com/jobs', 'in.linkedin.com/jobs'
+        ]
         if any(forbidden in url_lower for forbidden in forbidden_patterns):
             return False
 
@@ -218,7 +222,37 @@ class LinkedInFinder:
                 break
 
         parsed_posts = []
-        for post_url in found_urls[:max_results]:
+        import time, datetime
+        for post_url in found_urls:
+            if len(parsed_posts) >= max_results:
+                break
+
+            if not self.is_valid_recruiter_post_url(post_url):
+                continue
+
+            ts = LinkedInSessionSearch.get_post_timestamp(post_url)
+            posted_human = "Recently"
+            if ts is not None:
+                age_sec = time.time() - ts
+                tf = (timeframe or "w").lower()
+                if "d" in tf or "24h" in tf:
+                    if age_sec > (86400 * 1.15):
+                        continue
+                elif "w" in tf:
+                    if age_sec > (7 * 86400 * 1.1):
+                        continue
+                elif "m" in tf:
+                    if age_sec > (31 * 86400 * 1.05):
+                        continue
+                
+                dt = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+                if age_sec < 3600:
+                    posted_human = f"{int(age_sec // 60)} mins ago"
+                elif age_sec < 86400:
+                    posted_human = f"{int(age_sec // 3600)} hrs ago"
+                else:
+                    posted_human = f"{int(age_sec // 86400)} days ago"
+
             post_data = LinkedInPostExtractor.extract_from_url(
                 url=post_url,
                 skills_taxonomy=self.skills_taxonomy
@@ -232,6 +266,7 @@ class LinkedInFinder:
                     "work_mode": "Remote / WFH" if "remote" in post_data.get("full_post_content", "").lower() else "On-Site / Unspecified",
                     "salary_range": "Competitive / Disclosed in post",
                     "experience_required": "1-3+ Years (Estimated)",
+                    "posted_time": posted_human,
                     "required_skills": post_data.get("detected_skills", []),
                     "contact_emails": post_data.get("recruiter_emails", []),
                     "contact_phones": post_data.get("contact_numbers", []),
@@ -317,12 +352,44 @@ class LinkedInFinder:
                 break
 
         parsed_results = []
-        for p_url in found_urls[:max_results]:
+        import time, datetime
+        for p_url in found_urls:
+            if len(parsed_results) >= max_results:
+                break
+
+            # STRICT BAN on /jobs/, /jobs/view/, and non-post links
+            if not self.is_valid_recruiter_post_url(p_url):
+                continue
+
+            ts = LinkedInSessionSearch.get_post_timestamp(p_url)
+            posted_human = "Recently"
+            if ts is not None:
+                age_sec = time.time() - ts
+                dp = (date_posted or "past-week").lower()
+                if "24h" in dp or "day" in dp:
+                    if age_sec > (86400 * 1.15):
+                        continue
+                elif "week" in dp or "1w" in dp:
+                    if age_sec > (7 * 86400 * 1.1):
+                        continue
+                elif "month" in dp or "1m" in dp:
+                    if age_sec > (31 * 86400 * 1.05):
+                        continue
+                
+                dt = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+                if age_sec < 3600:
+                    posted_human = f"{int(age_sec // 60)} mins ago"
+                elif age_sec < 86400:
+                    posted_human = f"{int(age_sec // 3600)} hrs ago"
+                else:
+                    posted_human = f"{int(age_sec // 86400)} days ago"
+
             post_info = LinkedInPostExtractor.extract_from_url(
                 url=p_url,
                 skills_taxonomy=self.skills_taxonomy
             )
             if post_info and "error" not in post_info:
+                post_info["posted_time"] = posted_human
                 parsed_results.append(post_info)
 
         if parsed_results:
