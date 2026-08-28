@@ -408,7 +408,7 @@ async def mcp_message_handler(request: Request):
                     },
                     {
                         "name": "generate_recruiter_pitch",
-                        "description": "Generates 4 personalized recruiter outreach formats (Connection Note <300 chars, InMail, Formal Cover Email, Follow-Up).",
+                        "description": "Generates 4 personalized recruiter outreach formats (Connection Note <300 chars, InMail, Formal Cover Email with 1-Click 'Open in Mail App' button/mailto deep link, Follow-Up).",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
@@ -417,7 +417,8 @@ async def mcp_message_handler(request: Request):
                                 "matched_skills": { "type": "string", "description": "Key candidate skills", "default": "React" },
                                 "candidate_name": { "type": "string", "description": "Candidate name", "default": "Candidate" },
                                 "candidate_exp_years": { "type": "integer", "description": "Candidate total years of experience", "default": 1 },
-                                "recipient_name": { "type": "string", "description": "Recruiter / Hiring Manager name", "default": "Hiring Team" }
+                                "recipient_name": { "type": "string", "description": "Recruiter / Hiring Manager name", "default": "Hiring Team" },
+                                "recipient_email": { "type": "string", "description": "Recruiter contact email (e.g. 'hr@company.com')" }
                             },
                             "required": ["job_title"]
                         }
@@ -585,6 +586,7 @@ async def mcp_message_handler(request: Request):
             candidate_name = args.get("candidate_name", "Candidate")
             candidate_exp_years = int(args.get("candidate_exp_years", 1))
             recipient_name = args.get("recipient_name") or args.get("author")
+            recipient_email = args.get("recipient_email") or args.get("hr_email")
 
             pitches = OutreachPitchGenerator.generate_suite(
                 job_title=job_title,
@@ -592,7 +594,8 @@ async def mcp_message_handler(request: Request):
                 matched_skills=matched_skills,
                 candidate_name=candidate_name,
                 candidate_exp_years=candidate_exp_years,
-                recipient_name=recipient_name
+                recipient_name=recipient_name,
+                recipient_email=recipient_email
             )
 
             response_payload = {

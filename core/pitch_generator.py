@@ -1,10 +1,12 @@
+import urllib.parse
 from typing import Dict, Any, Optional, List
 
 
 class OutreachPitchGenerator:
     """
     Generates high-converting, professional cold outreach message suites
-    specifically tailored to recruiter personas and candidate strengths.
+    specifically tailored to recruiter personas and candidate strengths,
+    with 1-click 'Open in Mail' (mailto / Gmail deep link) actions.
     """
 
     @staticmethod
@@ -14,10 +16,11 @@ class OutreachPitchGenerator:
         matched_skills: Optional[List[str]] = None,
         candidate_name: str = "Candidate",
         candidate_exp_years: int = 2,
-        recipient_name: Optional[str] = None
-    ) -> Dict[str, str]:
+        recipient_name: Optional[str] = None,
+        recipient_email: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
-        Generates 4 tailored outreach message variations.
+        Generates 4 tailored outreach message variations plus 1-click email launch links.
         """
         matched_skills = matched_skills or ["Full Stack Development"]
         skills_str = ", ".join(matched_skills[:3]) if matched_skills else "modern software engineering"
@@ -46,8 +49,8 @@ class OutreachPitchGenerator:
         )
 
         # 3. Formal Executive Cover Email
-        formal_email = (
-            f"Subject: Application: {job_title} - {candidate_name} ({skills_str})\n\n"
+        email_subject = f"Application: {job_title} - {candidate_name} ({skills_str})"
+        email_body = (
             f"Dear {recipient_name or 'Hiring Team'},\n\n"
             f"I am writing to express my enthusiastic interest in the {job_title} opening at {company_name} as shared on LinkedIn.\n\n"
             f"Having worked extensively with {skills_str} for over {candidate_exp_years}+ years, I have successfully engineered "
@@ -59,7 +62,20 @@ class OutreachPitchGenerator:
             f"Sincerely,\n{candidate_name}\n[Your Phone Number]\n[LinkedIn Profile Link]"
         )
 
-        # 4. Day-3 Follow-Up Note
+        formal_email = f"Subject: {email_subject}\n\n{email_body}"
+
+        # 4. 1-Click Deep Links (mailto & Gmail Web)
+        to_email = (recipient_email or "").strip()
+        encoded_subject = urllib.parse.quote(email_subject)
+        encoded_body = urllib.parse.quote(email_body)
+
+        mailto_link = f"mailto:{to_email}?subject={encoded_subject}&body={encoded_body}"
+        gmail_link = f"https://mail.google.com/mail/?view=cm&fs=1&to={to_email}&su={encoded_subject}&body={encoded_body}"
+
+        open_in_mail_button = f"[✉️ Open in Mail App]({mailto_link})"
+        open_in_gmail_button = f"[🌐 Open in Gmail Web]({gmail_link})"
+
+        # 5. Day-3 Follow-Up Note
         follow_up = (
             f"Hi {greeting_name},\n\n"
             f"I hope you are having a productive week! Following up on my application for the {job_title} position at {company_name}. "
@@ -75,5 +91,12 @@ class OutreachPitchGenerator:
             "linkedin_dm": linkedin_dm,
             "linkedin_inmail_dm": linkedin_dm,
             "formal_cover_email": formal_email,
+            "email_subject": email_subject,
+            "email_body": email_body,
+            "recipient_email": to_email,
+            "mailto_url": mailto_link,
+            "gmail_web_url": gmail_link,
+            "open_in_mail_button": open_in_mail_button,
+            "open_in_gmail_button": open_in_gmail_button,
             "day3_follow_up": follow_up
         }
