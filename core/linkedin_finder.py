@@ -192,9 +192,23 @@ class LinkedInFinder:
 
         max_age_minutes = intent.max_age_minutes
         cache_key = f"hiring_posts::{intent.target_role}::{intent.target_location}::{timeframe}::{remote_only}::{max_results}"
-        cached = self.cache.get(cache_key, timeframe=timeframe)
-        if cached is not None and len(cached) > 0:
-            return cached
+        
+        if not debug:
+            cached = self.cache.get(cache_key, timeframe=timeframe)
+            if cached is not None and len(cached) > 0:
+                from datetime import datetime, timezone
+                from core.time_utils import format_time_ago, parse_iso_datetime
+                now_utc = datetime.now(timezone.utc)
+                for item in cached:
+                    pub_iso = item.get("published_at")
+                    if pub_iso:
+                        pub_dt = parse_iso_datetime(pub_iso)
+                        if pub_dt:
+                            diff_sec = max(0.0, (now_utc - pub_dt).total_seconds())
+                            item["age_minutes"] = int(diff_sec / 60)
+                            item["age_hours"] = round(diff_sec / 3600, 1)
+                            item["posted_time"] = format_time_ago(int(diff_sec / 60))
+                return cached
 
         # 1. Primary: Authenticated LinkedIn Session Search (Posts Tab)
         session_posts = await LinkedInSessionSearch.search_posts_internal_async(
@@ -388,9 +402,22 @@ class LinkedInFinder:
 
         max_age_minutes = intent.max_age_minutes
         cache_key = f"search_posts::{intent.target_role}::{date_posted}::{intent.target_location}::{max_results}"
-        cached = self.cache.get(cache_key, timeframe=date_posted)
-        if cached is not None and len(cached) > 0:
-            return cached
+        if not debug:
+            cached = self.cache.get(cache_key, timeframe=date_posted)
+            if cached is not None and len(cached) > 0:
+                from datetime import datetime, timezone
+                from core.time_utils import format_time_ago, parse_iso_datetime
+                now_utc = datetime.now(timezone.utc)
+                for item in cached:
+                    pub_iso = item.get("published_at")
+                    if pub_iso:
+                        pub_dt = parse_iso_datetime(pub_iso)
+                        if pub_dt:
+                            diff_sec = max(0.0, (now_utc - pub_dt).total_seconds())
+                            item["age_minutes"] = int(diff_sec / 60)
+                            item["age_hours"] = round(diff_sec / 3600, 1)
+                            item["posted_time"] = format_time_ago(int(diff_sec / 60))
+                return cached
 
         session_results = await LinkedInSessionSearch.search_posts_internal_async(
             keywords=intent.target_role,
