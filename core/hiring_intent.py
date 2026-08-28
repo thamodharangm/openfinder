@@ -484,13 +484,19 @@ class ExperienceRelevanceMatcher:
         if min_exp <= candidate_exp_years <= max_exp:
             return {"fit": "PERFECT", "score": 100, "min_exp": min_exp, "max_exp": max_exp}
         elif candidate_exp_years > max_exp and (candidate_exp_years - max_exp) <= 2:
+            # Slightly over-qualified: still a good fit
             return {"fit": "GOOD", "score": 85, "min_exp": min_exp, "max_exp": max_exp}
-        elif candidate_exp_years < min_exp and (min_exp - candidate_exp_years) <= 2:
-            return {"fit": "ACCEPTABLE", "score": 70, "min_exp": min_exp, "max_exp": max_exp}
+        elif candidate_exp_years < min_exp and (min_exp - candidate_exp_years) == 1:
+            # 1 year below minimum: borderline acceptable
+            return {"fit": "ACCEPTABLE", "score": 60, "min_exp": min_exp, "max_exp": max_exp}
         elif candidate_exp_years > max_exp:
-            return {"fit": "ACCEPTABLE", "score": 70, "min_exp": min_exp, "max_exp": max_exp}
+            # Significantly over-qualified
+            return {"fit": "ACCEPTABLE", "score": 65, "min_exp": min_exp, "max_exp": max_exp}
         else:
-            return {"fit": "MISMATCH", "score": 25, "min_exp": min_exp, "max_exp": max_exp}
+            # Gap >= 2 years below minimum: genuine mismatch
+            gap = min_exp - candidate_exp_years
+            score = max(10, 40 - (gap * 10))  # 30 for 2yr gap, 20 for 3yr gap, etc.
+            return {"fit": "MISMATCH", "score": score, "min_exp": min_exp, "max_exp": max_exp}
 
 
 class QualityScorer:

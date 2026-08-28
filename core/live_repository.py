@@ -192,17 +192,6 @@ VERIFIED_RECRUITER_POSTS: List[Dict[str, Any]] = [
         "work_mode": "On-Site",
         "recruiter_emails": ["recruitment@aliteprojects.com"],
     },
-    {
-        "url": "https://www.linkedin.com/posts/arustu-technology_were-hiring-mern-stack-developer-activity-7330936642167300098-ptae",
-        "keywords": ["mern", "mern stack", "react", "node.js", "mongodb"],
-        "locations": ["surat", "gujarat"],
-        "primary_location": "Surat",
-        "author": "Arustu Technology",
-        "company": "Arustu Technology",
-        "role": "MERN Stack Developer",
-        "work_mode": "On-Site",
-        "recruiter_emails": ["hr@arustu.com"],
-    },
     # ── CHENNAI / TAMIL NADU ─────────────────────────────────────────────────
     {
         "url": "https://www.linkedin.com/posts/anithadurairaj_job-title-mern-full-stack-developer-company-activity-7435555724329537538-HZql",
@@ -300,9 +289,11 @@ def find_matching_post_records(role: str, location: str, max_count: int = 23) ->
 
     Priority tiers:
       1. Role match AND city/region match (exact)
-      2. Role match AND remote/india (only for non-specific-city queries)
-      3. Role match only (no location constraint)
-      4. Everything (last resort, when role itself doesn't match)
+      2. Role match AND remote/generic (only for non-specific-city queries)
+
+    For specific city queries (e.g. Bangalore, Chennai), tier3 (role-only fallbacks
+    from unrelated cities) are NOT included — they caused Surat/Vadodara results
+    to bleed into Bangalore searches.
     """
     clean_role = role.lower().replace("-", " ").strip()
     clean_loc = location.lower().strip() if location else "india"
@@ -310,12 +301,11 @@ def find_matching_post_records(role: str, location: str, max_count: int = 23) ->
     # Determine which location tags count as a match for this query
     qualifying_loc_tags = LOCATION_ALIASES.get(clean_loc)
     if qualifying_loc_tags is None:
-        # Fallback: any post whose locations list contains clean_loc as a substring
         qualifying_loc_tags = [clean_loc]
 
     is_specific_city = clean_loc in _SPECIFIC_CITIES
 
-    tier1, tier2, tier3 = [], [], []
+    tier1, tier2 = [], []
 
     for item in VERIFIED_RECRUITER_POSTS:
         kws = item["keywords"]
@@ -335,13 +325,15 @@ def find_matching_post_records(role: str, location: str, max_count: int = 23) ->
         elif role_match and generic_match:
             if item not in tier2 and item not in tier1:
                 tier2.append(item)
-        elif role_match:
-            if item not in tier3 and item not in tier2 and item not in tier1:
-                tier3.append(item)
 
-    combined = tier1 + tier2 + tier3
-    if not combined:
-        # Last resort: all role-matched posts regardless of location
+    combined = tier1 + tier2
+
+    # Last resort: only when specific city search finds nothing — widen to role-only
+    if not combined and is_specific_city:
+        # Still no tier3 (no out-of-city posts) — return empty to signal live search needed
+        combined = []
+    elif not combined:
+        # Non-specific query (e.g. "India", "any") — include all role-matched posts
         combined = [i for i in VERIFIED_RECRUITER_POSTS
                     if any(kw in clean_role or clean_role in kw for kw in i["keywords"])]
     if not combined:
