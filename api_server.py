@@ -40,7 +40,10 @@ from core.service import OpenFinderService
 app = FastAPI(
     title="OpenFinder - Universal AI Job Catcher for Freshers & Experienced",
     description="Full Dual Protocol API supporting ChatGPT OpenAPI Actions and Claude Web Connectors (MCP SSE & JSON-RPC).",
-    version="2.0.0"
+    version="2.0.0",
+    servers=[
+        {"url": "https://openfinder.onrender.com", "description": "Production OpenFinder API Server"}
+    ]
 )
 
 # Enable CORS and bypass headers
