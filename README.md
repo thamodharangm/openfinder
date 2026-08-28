@@ -1,153 +1,303 @@
 <p align="center">
-  <img src="openfinderlogo.svg" alt="OpenFinder Logo" width="440" />
+  <img src="openfinderlogo.svg" alt="OpenFinder Logo" width="460" />
 </p>
 
-<h1 align="center">🎯 OpenFinder v2.0 - Universal AI Job Catcher for Freshers & Experienced</h1>
+<h1 align="center">🎯 OpenFinder v2.0 - Universal AI Job Catcher & Recruiter Scout</h1>
 
 <p align="center">
-  <strong>High-Precision, Real-Time LinkedIn Hiring Post Finder, Candidate Resume Matcher & Recruiter Outreach Suite</strong><br>
-  <em>Native Product Integration with ChatGPT Custom GPT Actions, Claude MCP / Connectors, Cursor, Antigravity &amp; Python CLI</em>
+  <strong>High-Precision, Real-Time LinkedIn Hiring Post Finder, Candidate Resume Matcher & Recruiter Outreach Engine</strong><br>
+  <em>Dual Protocol API & Integration Hub for Claude Desktop (MCP), ChatGPT Custom GPT Actions, Cursor, Antigravity & Python CLI</em>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white" />
-  <img src="https://img.shields.io/badge/MCP-Protocol_2024--11--05-7C3AED?logo=anthropic&logoColor=white" />
-  <img src="https://img.shields.io/badge/ChatGPT-Custom_GPT_Actions-10A37F?logo=openai&logoColor=white" />
-  <img src="https://img.shields.io/badge/LinkedIn-Strict_/posts/_Only-0A66C2?logo=linkedin&logoColor=white" />
-  <img src="https://img.shields.io/badge/Async-Bounded_Concurrency-22C55E?logo=fastapi&logoColor=white" />
-  <img src="https://img.shields.io/badge/Ranking-Multi--Signal_Scorer-8B5CF6" />
-  <img src="https://img.shields.io/badge/License-MIT-22C55E.svg" />
+  <a href="https://openfinder.onrender.com"><img src="https://img.shields.io/badge/Live_API-openfinder.onrender.com-success?style=for-the-badge&logo=render" alt="Live API" /></a>
+  <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+" />
+  <img src="https://img.shields.io/badge/MCP-Protocol_2024--11--05-7C3AED?style=for-the-badge&logo=anthropic&logoColor=white" alt="MCP Protocol" />
+  <img src="https://img.shields.io/badge/ChatGPT-OpenAPI_3.0_Actions-10A37F?style=for-the-badge&logo=openai&logoColor=white" alt="ChatGPT Actions" />
+  <img src="https://img.shields.io/badge/License-MIT-blue?style=for-the-badge" alt="License" />
 </p>
 
 ---
 
 ## 💡 What is OpenFinder?
 
-**OpenFinder** is an enterprise-grade AI career scout that connects modern conversational AI (**ChatGPT Custom GPTs**, **Claude Desktop / Web Connectors**, **Cursor**, **Antigravity IDE**) to genuine **LinkedIn hiring posts** published by founders, engineering managers, and technical recruiters.
+**OpenFinder** is an intelligent AI career discovery engine designed to bridge conversational AI agents (**Claude Desktop**, **ChatGPT Custom GPTs**, **Antigravity IDE**, and **Cursor**) directly to **verified, live recruiter hiring posts** on LinkedIn.
 
-### Key Capabilities:
-1. **STRICT `/posts/` ONLY**: Discovers exclusively genuine LinkedIn post announcements (`https://www.linkedin.com/posts/...`), permanently rejecting job aggregator feeds, pulse articles, and company links.
-2. **Persistent Candidate Profiles**: Upload your CV once via ChatGPT or Claude to obtain a `candidate_profile_id` stored in SQLite, enabling instant ATS matching on every subsequent search without re-uploading.
-3. **Exact Minute-Level Freshness**: Enforces mathematical UTC freshness verification (`0 <= age < max_age`) supporting `past-1h`, `past-4h`, `past-12h`, `past-24h`, and `past-7d`.
-4. **Directional Hiring Intent**: Distinguishes recruiters from `#OpenToWork` candidates and spam.
-5. **Role Precision Filtering**: Employs semantic tech signals and negative stack dominance penalties (e.g., rejecting unrelated ColdFusion or DevOps posts for React searches).
-6. **Bounded Async Concurrency**: Employs `httpx.AsyncClient` connection pooling with bounded semaphore concurrency (`max_concurrency=5`), delivering sub-2-second batch extractions.
-7. **Opportunity Ranking Engine**: Combines Post Credibility (45%) and Candidate Resume Fit (55%) with deterministic tie-breakers and explainable evidence reasons.
+Unlike traditional job aggregators that display expired or spam listings, OpenFinder discovers genuine founder, hiring manager, and technical recruiter posts with direct contact emails and exact timestamp freshness.
+
+### 🌟 Core Capabilities
+
+* 🔍 **Verified `/posts/` Only**: Discovers exclusively genuine LinkedIn post announcements (`https://www.linkedin.com/posts/...`), rejecting noisy aggregator portals and promotional spam.
+* ⚡ **Automatic 9-Task Concurrent Query Expansion**: Runs parallel multi-role searches (`React`, `MERN`, `Frontend`, `Node.js`, `React Native`, `Full Stack`) across target cities and Remote, returning **20+ verified opportunities by default** in sub-2-second queries.
+* 🕒 **Snowflake Millisecond Freshness**: Decodes 64-bit LinkedIn Snowflake IDs (`(activity_id >> 22) / 1000`) for mathematical publication timestamp verification across `past-1h`, `past-4h`, `past-12h`, `past-24h`, and `past-7d`.
+* 📄 **Hardened PDF Resume Parser**: Extracts candidate technical taxonomy, years of experience, contact information, and target roles.
+* 🎯 **Canonical Skill Normalization & ATS Scoring**: Intelligently treats aliases as identical (`React.js == React`, `Node.js == Node`, `Express.js == Express`) and computes multi-dimensional ATS match percentages with actionable gap analysis.
+* ✉️ **1-Click Recruiter Outreach Suite**: Extracts direct HR emails and phone numbers while generating tailored `<300` character LinkedIn connection notes and formal cover letters.
 
 ---
 
-## 🔄 End-to-End System Architecture
+## 🏗️ System Architecture
 
 ```mermaid
 flowchart TD
     subgraph CLIENTS ["1. Universal AI Client Interfaces"]
-        C1[ChatGPT Custom GPT Actions OpenAPI]
-        C2[Claude Desktop / Cursor / Antigravity FastMCP]
+        C1[ChatGPT Custom GPT Actions OpenAPI 3.0]
+        C2[Claude Desktop / Antigravity FastMCP stdio]
         C3[Claude Web SSE Connector JSON-RPC]
         C4[Terminal CLI: python scout.py]
     end
 
-    subgraph SERVICE ["2. Canonical Service & Profile Persistence Layer"]
+    subgraph SERVICE ["2. Canonical Service & Persistence Layer"]
         C1 & C2 & C3 & C4 --> S0[OpenFinderService]
-        S0 -->|Upload CV PDF| S1[(CandidateProfileStore / SQLite)]
-        S0 -->|Search with candidate_profile_id| S2{Timeframe-Aware SQLite Cache}
-        S2 -->|Cache Hit <3ms| RET[Return Ranked Opportunities]
-        S2 -->|Cache Miss| D1[Multi-Query Generator]
+        S0 -->|Upload CV PDF / JSON| S1[(CandidateProfileStore / SQLite)]
+        S0 --> S2[Concurrent Multi-Query Expander]
     end
 
-    subgraph DISCOVERY ["3. High-Recall Discovery & Pre-Filter"]
-        D1 --> D2[LinkedInSessionSearch / Content Tab]
-        D2 --> D3[Cross-Query Normalization & Dedup]
-        D3 --> D4[Snowflake Timestamp Pre-Check]
-        D4 --> D5[Early Stopping & Candidate Pool Budget]
+    subgraph DISCOVERY ["3. High-Recall Discovery & Verification"]
+        S2 -->|Parallel 9-Tasks| D1[LinkedIn Session & Mirror Discovery]
+        D1 --> D2[Spam & Non-Hiring Intent Filter]
+        D2 --> D3[Snowflake Exact Time Validator]
+        D3 --> D4[URL Normalizer & Deduplicator]
     end
 
-    subgraph EXTRACTION ["4. Bounded Async Batch Extraction"]
-        D5 --> E1[httpx.AsyncClient Connection Pool]
-        E1 --> E2[asyncio.Semaphore max_concurrency=5]
-        E2 --> E3[Error Isolation & Retry Safety]
-        E3 --> E4[HiringIntentClassifier & Spam Filter]
-        E4 --> E5[Role / Location / Experience Relevance]
+    subgraph RANKING ["4. OpportunityRanker & Outreach Suite"]
+        D4 --> R1[Canonical Skill Alias Normalizer]
+        R1 --> R2[JobMatcher: Weighted ATS Scorer 0-100%]
+        R2 --> R3[OpportunityRanker: Final Ranking & Diversity]
+        R3 --> R4[OutreachPitchGenerator: Connection Notes & Emails]
     end
 
-    subgraph RANKING ["5. OpportunityRanker & Outreach Suite"]
-        E5 --> R1[Post Quality Score 0-100]
-        R1 --> R2[JobMatcher: Candidate Match Score 0-100]
-        R2 --> R3[OpportunityRanker: Final Rank Score 0-100]
-        R3 --> R4[Soft Company Diversity & Deterministic Sort]
-        R4 --> R5[OutreachPitchGenerator: Connection Notes & DMs]
-    end
-
-    R5 --> CLIENTS
+    R4 --> CLIENTS
 ```
 
 ---
 
-## ⚙️ Configuration & Environment Variables
+## 🌐 Live Cloud Endpoints (`https://openfinder.onrender.com`)
 
-Create a `.env` file in the root directory:
-
-```env
-# LinkedIn Authentication Session (Server-Side Secrets)
-LINKEDIN_LI_AT="your_li_at_cookie_here"
-LINKEDIN_JSESSIONID="your_jsessionid_here"
-
-# Concurrency & Performance
-OPENFINDER_CONCURRENCY=5
-
-# Server & API
-PORT=8000
-HOST="0.0.0.0"
-```
-
-> [!IMPORTANT]
-> LinkedIn cookies are strictly **server-side secrets**. OpenFinder never exposes credentials in API responses, logs, candidate profiles, or debug output.
+| Endpoint | Method | Description | Key Parameters |
+| :--- | :---: | :--- | :--- |
+| `/` | `GET` | Server Health & Protocol Readiness Check | None |
+| `/api/search-opportunities` | `GET` / `POST` | **Primary Opportunity Search** (20+ verified posts with ATS fit) | `query`, `location`, `timeframe`, `candidate_skills`, `candidate_exp_years`, `candidate_profile_id` |
+| `/api/create-candidate-profile` | `POST` | Stores candidate JSON profile for persistent ATS scoring | `candidate_name`, `skills`, `years_of_experience`, `target_roles` |
+| `/api/upload-resume` | `POST` | Multipart PDF resume upload & profile generator | `file` (PDF binary) |
+| `/api/generate-pitch` | `POST` | Generates tailored outreach emails & notes | `job_title`, `company_name`, `matched_skills`, `candidate_name` |
+| `/api/parse-post` | `GET` / `POST` | Deep intelligence extraction from any single LinkedIn post URL | `post_url`, `candidate_name` |
+| `/api/search-posts` | `GET` / `POST` | Global keyword search on LinkedIn Posts tab | `keywords`, `date_posted`, `max_results` |
 
 ---
 
-## 🛠️ Canonical API & MCP Tools Overview
+## 🔌 Integration Setup Guides
 
-OpenFinder exposes standardized tools across ChatGPT Actions, Claude MCP, and REST:
-
-| Tool / Endpoint | Interface | Description | Key Parameters |
-| :--- | :--- | :--- | :--- |
-| `upload_resume`<br>`/api/upload-resume` | ChatGPT / Claude / REST | Uploads and parses candidate PDF resume, persists profile, and returns a unique `candidate_profile_id`. | `file` (multipart/form-data) or `resume_path` |
-| `get_candidate_profile`<br>`/api/candidate-profile/{id}` | ChatGPT / Claude / REST | Retrieves stored candidate profile, technical skills, and seniority level by ID. | `candidate_profile_id` |
-| `search_opportunities`<br>`/api/search-opportunities` | ChatGPT / Claude / REST | **Canonical search tool**. Searches verified LinkedIn hiring `/posts/` with exact freshness validation and ATS candidate fit ranking. | `query`, `location`, `timeframe`, `max_results`, `candidate_profile_id` |
-| `generate_recruiter_pitch`<br>`/api/generate-pitch` | ChatGPT / Claude / REST | Formats 4 high-converting outreach templates (Connection Note <300 chars, InMail, Email, Follow-up). | `job_title`, `company_name`, `matched_skills` |
-| `search_posts` | Claude / CLI | Searches LinkedIn posts globally by keyword with exact publication time verification. | `keywords`, `date_posted`, `max_results` |
-| `parse_linkedin_post` | Claude / CLI | Directly extracts HR contact emails, phone numbers, and required skills from any `/posts/` URL. | `post_url`, `candidate_name`, `candidate_exp_years` |
-
----
-
-## 🤖 ChatGPT Custom GPT Actions Integration
-
-To connect OpenFinder to your Custom GPT:
-
-1. In ChatGPT GPT Editor $\rightarrow$ **Configure** $\rightarrow$ **Actions** $\rightarrow$ **Create new action**.
-2. Paste the contents of [`chatgpt_openapi_schema.json`](file:///d:/projects/research/linkedin-job-scout-mcp/chatgpt_openapi_schema.json).
-3. Set Server URL to your deployment URL (e.g. `https://openfinder.onrender.com` or `http://localhost:8000`).
-4. In GPT Instructions, specify:
-   ```text
-   When the user provides a resume, call `uploadResume` to create a candidate profile.
-   When the user asks for jobs, call `searchOpportunities` with their `candidate_profile_id`, role, location, and timeframe.
-   Always present opportunities clearly with Company, Role, Location, Age, Match Score, Recruiter Contact, and Direct Post Link.
-   ```
-
----
-
-## 🧠 Claude MCP Setup (Desktop, Cursor, Antigravity)
+### 🟣 1. Claude Desktop Setup (MCP Connector)
 
 Add OpenFinder to your `claude_desktop_config.json`:
+
+* **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+* **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
 
 ```json
 {
   "mcpServers": {
     "openfinder": {
       "command": "python",
-      "args": ["d:/projects/research/linkedin-job-scout-mcp/server.py"],
+      "args": [
+        "d:/projects/research/linkedin-job-scout-mcp/server.py"
+      ],
       "env": {
-        "LINKEDIN_LI_AT": "your_cookie_here"
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  }
+}
+```
+
+#### 💬 Claude 1-Click Prompt (Just attach PDF resume):
+```text
+I have attached my resume PDF. Using OpenFinder (https://openfinder.onrender.com/):
+1. Extract my technical stack, experience, and target roles.
+2. Search for live, verified LinkedIn hiring posts in Bangalore & Remote from the LAST 24 HOURS (and past week).
+3. Present all matching opportunities in a table with Match Score (%), Role & Company, Recruiter Name & Email, Location, Freshness, and 1-Click Apply Links.
+4. Generate a ready-to-send LinkedIn connection note (<300 chars) for the top matched job.
+```
+
+---
+
+### 🟢 2. ChatGPT Custom GPT Setup (OpenAPI 3.0 Actions)
+
+1. Open **ChatGPT -> Explore GPTs -> Create New GPT**.
+2. Navigate to **Configure -> Actions -> Create new action**.
+3. In the **Schema** editor, paste the 100% compliant OpenAPI 3.0.1 schema:
+
+```json
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "OpenFinder Universal AI Job Scout",
+    "description": "Live verified LinkedIn recruiter post finder and ATS job matcher.",
+    "version": "2.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://openfinder.onrender.com"
+    }
+  ],
+  "paths": {
+    "/api/search-opportunities": {
+      "get": {
+        "summary": "Search Verified LinkedIn Hiring Opportunities",
+        "operationId": "searchOpportunities",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "schema": { "type": "string", "default": "React Developer" }
+          },
+          {
+            "name": "location",
+            "in": "query",
+            "schema": { "type": "string", "default": "Bangalore" }
+          },
+          {
+            "name": "timeframe",
+            "in": "query",
+            "schema": { "type": "string", "default": "past-24h" }
+          },
+          {
+            "name": "max_results",
+            "in": "query",
+            "schema": { "type": "integer", "default": 20 }
+          },
+          {
+            "name": "candidate_skills",
+            "in": "query",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "candidate_exp_years",
+            "in": "query",
+            "schema": { "type": "integer", "default": 1 }
+          },
+          {
+            "name": "candidate_name",
+            "in": "query",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "count": { "type": "integer" },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "title": { "type": "string" },
+                          "company": { "type": "string" },
+                          "author": { "type": "string" },
+                          "recruiter_emails": { "type": "array", "items": { "type": "string" } },
+                          "location": { "type": "string" },
+                          "posted_time": { "type": "string" },
+                          "post_url": { "type": "string" },
+                          "match_score": { "type": "integer" },
+                          "matched_skills": { "type": "array", "items": { "type": "string" } }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/create-candidate-profile": {
+      "post": {
+        "summary": "Create Candidate Profile from JSON",
+        "operationId": "createCandidateProfile",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "candidate_name": { "type": "string" },
+                  "email": { "type": "string" },
+                  "phone": { "type": "string" },
+                  "years_of_experience": { "type": "integer" },
+                  "primary_role": { "type": "string" },
+                  "skills": { "type": "array", "items": { "type": "string" } },
+                  "target_roles": { "type": "array", "items": { "type": "string" } }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Profile created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "candidate_profile_id": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/generate-pitch": {
+      "post": {
+        "summary": "Generate Outreach Pitch",
+        "operationId": "generatePitch",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": ["job_title"],
+                "properties": {
+                  "job_title": { "type": "string" },
+                  "company_name": { "type": "string", "default": "Hiring Team" },
+                  "matched_skills": { "type": "string", "default": "React, Node.js" },
+                  "candidate_name": { "type": "string", "default": "Candidate" },
+                  "candidate_exp_years": { "type": "integer", "default": 1 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Pitch created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "linkedin_connection_note_300_chars": { "type": "string" },
+                    "formal_cover_email": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -156,58 +306,45 @@ Add OpenFinder to your `claude_desktop_config.json`:
 
 ---
 
-## ⚡ Quick Start & CLI Usage
+## 💻 Standalone Terminal CLI Usage (`scout.py`)
+
+You can also run OpenFinder directly from your command line:
 
 ```bash
-# 1. Install dependencies
-pip install -r requirements.txt
+# 1. Search Live Recruiter Posts in Bangalore (Past 24 Hours)
+python scout.py "React Developer" "Bangalore" -d past-24h -n 10
 
-# 2. Search React Developer posts in Bangalore from past 24 hours
-python scout.py "React Developer" "Bangalore" --date-posted past-24h
+# 2. Match Opportunities against your PDF Resume
+python scout.py --resume my_resume.pdf --location "Bangalore" -d past-7d
 
-# 3. Search and match against candidate resume
-python scout.py --resume sample_resume.pdf --location Bangalore --date-posted past-24h
+# 3. Deep Extract HR Email & Generate Pitch from a single LinkedIn Post URL
+python scout.py --post "https://www.linkedin.com/posts/..." --resume my_resume.pdf
 
-# 4. Start FastAPI server for ChatGPT Actions / Claude Web
-python api_server.py
+# 4. Search Global Posts Tab
+python scout.py --search-posts "MERN Developer hiring Bangalore" -d past-24h
 ```
 
 ---
 
-## 🧪 Comprehensive Test Suites
-
-Run the full automated test matrix covering all architectural and product guarantees:
+## 📦 Local Installation & Development
 
 ```bash
-# Phase 1: URL Safety & Timestamp Boundaries
-python test_phase1.py
+# Clone the repository
+git clone https://github.com/thamodharangm/openfinder.git
+cd openfinder
 
-# Phase 2: Hiring Intent & Recruiter vs Job Seeker Classification
-python test_phase2.py
+# Install dependencies
+pip install -r requirements.txt
 
-# Phase 3: Role Precision & Negative Technology Penalties
-python test_phase3.py
+# Configure Environment Variables (Optional for direct LinkedIn cookie)
+cp .env.example .env
 
-# Phase 4: Discovery Pagination & Candidate Budgeting
-python test_phase4.py
-
-# Phase 5: Async Batch Concurrency & Connection Pooling
-python test_phase5.py
-
-# Phase 6: Multi-Signal Opportunity Ranking & Deterministic Sort
-python test_phase6.py
-
-# Phase 7: Production Hardening, Security Boundaries & Corruption Recovery
-python test_phase7.py
-
-# Phase 8: ChatGPT Actions, Claude MCP & Candidate Profile Store
-python test_phase8.py
-
-# End-to-End Career Suite Demonstration
-python test_pipeline.py
+# Run FastAPI Production Server Locally
+uvicorn api_server:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ---
 
 ## 📄 License
-MIT License. Open-source for all developers and AI agents.
+
+Distributed under the **MIT License**. Free for personal and commercial usage.
