@@ -20,6 +20,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from mcp.server.fastmcp import FastMCP
+from core.service import OpenFinderService
 from core.resume_parser import ResumeParser
 from core.linkedin_finder import LinkedInFinder
 from core.matcher import JobMatcher
@@ -30,9 +31,75 @@ from core.post_extractor import LinkedInPostExtractor
 mcp = FastMCP("OpenFinder - Professional Career Scout")
 
 # Initialize core services
+service = OpenFinderService()
 resume_parser = ResumeParser()
 linkedin_finder = LinkedInFinder()
 
+
+# ==============================================================================
+# CANONICAL PRODUCT MCP TOOLS (PHASE 8)
+# ==============================================================================
+
+@mcp.tool()
+def upload_resume(resume_path: str) -> Dict[str, Any]:
+    """
+    Uploads and parses a candidate PDF resume, extracts structured skills,
+    seniority, and target roles, persists the profile, and returns a unique
+    candidate_profile_id for personalized job searches.
+
+    Args:
+        resume_path: Path to the candidate's PDF resume on disk (e.g. 'C:/Users/.../resume.pdf').
+    """
+    return service.upload_resume(resume_path)
+
+
+@mcp.tool()
+def get_candidate_profile(candidate_profile_id: str) -> Dict[str, Any]:
+    """
+    Retrieves a stored candidate profile by its unique candidate_profile_id.
+
+    Args:
+        candidate_profile_id: Unique candidate profile ID (e.g. 'prof_a1b2c3d4e5f6').
+    """
+    return service.get_candidate_profile(candidate_profile_id)
+
+
+@mcp.tool()
+def search_opportunities(
+    query: str = "React Developer",
+    location: str = "India",
+    timeframe: str = "past-24h",
+    max_results: int = 10,
+    remote_only: bool = False,
+    candidate_profile_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Canonical Opportunity Search Tool.
+    Discovers verified LinkedIn recruiter hiring /posts/ with exact freshness validation
+    (past-1h, past-4h, past-12h, past-24h, past-7d), directional hiring intent, role precision,
+    and multi-signal opportunity ranking against candidate profile.
+
+    Args:
+        query: Target job role or technical skills (e.g. 'React Developer', 'MERN Stack', 'Python FastAPI').
+        location: City or region (e.g. 'Bangalore', 'Chennai', 'Remote', 'India').
+        timeframe: Recency filter ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d'). Default 'past-24h'.
+        max_results: Maximum opportunities to return (1-30, default 10).
+        remote_only: True to restrict to remote roles.
+        candidate_profile_id: Optional stored candidate profile ID for ATS skill and experience fit ranking.
+    """
+    return service.search_opportunities(
+        query=query,
+        location=location,
+        timeframe=timeframe,
+        max_results=max_results,
+        remote_only=remote_only,
+        candidate_profile_id=candidate_profile_id
+    )
+
+
+# ==============================================================================
+# LEGACY & SPECIALIZED MCP TOOLS
+# ==============================================================================
 
 @mcp.tool()
 def parse_resume(pdf_path: str) -> Dict[str, Any]:

@@ -31,6 +31,7 @@ from core.linkedin_finder import LinkedInFinder
 from core.matcher import JobMatcher
 from core.pitch_generator import OutreachPitchGenerator
 from core.post_extractor import LinkedInPostExtractor
+from core.service import OpenFinderService
 
 app = FastAPI(
     title="OpenFinder - Universal AI Career Scout & Claude Connector",
@@ -47,6 +48,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+service = OpenFinderService()
 resume_parser = ResumeParser()
 linkedin_finder = LinkedInFinder()
 
@@ -353,6 +355,33 @@ async def mcp_message_handler(request: Request):
                         }
                     },
                     {
+                        "name": "search_opportunities",
+                        "description": "Canonical search tool discovering verified LinkedIn recruiter hiring /posts/ with exact freshness validation (past-1h, past-4h, past-12h, past-24h, past-7d), directional hiring intent, and opportunity ranking against candidate profile.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "query": { "type": "string", "description": "Job role or technical skills (e.g. 'React Developer', 'Python FastAPI')", "default": "React Developer" },
+                                "location": { "type": "string", "description": "City or Region (e.g. 'Bangalore', 'Remote', 'India')", "default": "India" },
+                                "timeframe": { "type": "string", "description": "Freshness window ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d')", "default": "past-24h" },
+                                "max_results": { "type": "integer", "description": "Max opportunities (1-30)", "default": 10 },
+                                "remote_only": { "type": "boolean", "description": "Filter for remote positions only", "default": False },
+                                "candidate_profile_id": { "type": "string", "description": "Optional stored candidate profile ID for ATS skill & experience matching" }
+                            },
+                            "required": ["query"]
+                        }
+                    },
+                    {
+                        "name": "get_candidate_profile",
+                        "description": "Retrieves a stored candidate resume profile by its unique candidate_profile_id.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "candidate_profile_id": { "type": "string", "description": "Unique candidate profile ID (e.g. 'prof_a1b2c3d4e5f6')" }
+                            },
+                            "required": ["candidate_profile_id"]
+                        }
+                    },
+                    {
                         "name": "generate_recruiter_pitch",
                         "description": "Generates 4 personalized recruiter outreach formats (Connection Note <300 chars, InMail, Formal Cover Email, Follow-Up).",
                         "inputSchema": {
@@ -457,6 +486,53 @@ async def mcp_message_handler(request: Request):
                 }
             }
 
+        elif tool_name == "search_opportunities":
+            query = args.get("query", "React Developer")
+            location = args.get("location", "India")
+            timeframe = args.get("timeframe", "past-24h")
+            max_results = args.get("max_results", 10)
+            remote_only = args.get("remote_only", False)
+            candidate_profile_id = args.get("candidate_profile_id")
+
+            res = await service.search_opportunities_async(
+                query=query,
+                location=location,
+                timeframe=timeframe,
+                max_results=max_results,
+                remote_only=remote_only,
+                candidate_profile_id=candidate_profile_id
+            )
+
+            response_payload = {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(res, indent=2)
+                        }
+                    ]
+                }
+            }
+
+        elif tool_name == "get_candidate_profile":
+            candidate_profile_id = args.get("candidate_profile_id", "")
+            prof = service.get_candidate_profile(candidate_profile_id)
+
+            response_payload = {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(prof, indent=2)
+                        }
+                    ]
+                }
+            }
+
         elif tool_name == "generate_recruiter_pitch":
             job_title = args.get("job_title", "Software Engineer")
             company_name = args.get("company_name", "Hiring Team")
@@ -497,7 +573,63 @@ async def mcp_message_handler(request: Request):
 
 
 # ==========================================================
-# 🟢 CHATGPT OPENAPI REST ENDPOINTS
+# 🟢 CANONICAL PRODUCT & CHATGPT OPENAPI REST ENDPOINTS (PHASE 8)
+# ==========================================================
+
+@app.post("/api/upload-resume", tags=["Resume"])
+async def upload_resume_endpoint(file: UploadFile = File(...)) -> Dict[str, Any]:
+    """
+    Uploads and parses candidate PDF resume, creating a persistent candidate profile
+    and returning a unique candidate_profile_id for personalized job searches.
+    """
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = tmp.name
+
+    try:
+        res = service.upload_resume(tmp_path)
+        return res
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+@app.get("/api/candidate-profile/{profile_id}", tags=["Resume"])
+def get_candidate_profile_endpoint(profile_id: str) -> Dict[str, Any]:
+    """
+    Retrieves stored candidate profile by ID.
+    """
+    return service.get_candidate_profile(profile_id)
+
+
+@app.get("/api/search-opportunities", tags=["Opportunities"])
+@app.post("/api/search-opportunities", tags=["Opportunities"])
+async def search_opportunities_endpoint(
+    query: str = Query("React Developer", description="Role or tech stack (e.g. 'React Developer', 'Python FastAPI')"),
+    location: str = Query("India", description="Target city/location (e.g. 'Bangalore', 'Remote', 'India')"),
+    timeframe: str = Query("past-24h", description="Freshness window ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d')"),
+    max_results: int = Query(10, description="Max opportunities (1-30)"),
+    remote_only: bool = Query(False, description="Filter for remote roles"),
+    candidate_profile_id: Optional[str] = Query(None, description="Optional candidate profile ID for ATS skill & experience fit"),
+    debug: bool = Query(False, description="Include funnel and latency metrics")
+) -> Dict[str, Any]:
+    """
+    Canonical Opportunity Search endpoint.
+    Searches verified LinkedIn hiring /posts/ with exact freshness validation,
+    directional hiring intent, and opportunity ranking against candidate profile.
+    """
+    return await service.search_opportunities_async(
+        query=query,
+        location=location,
+        timeframe=timeframe,
+        max_results=max_results,
+        remote_only=remote_only,
+        candidate_profile_id=candidate_profile_id,
+        debug=debug
+    )
+
+
+# ==========================================================
+# 🟢 LEGACY & COMPATIBILITY REST ENDPOINTS
 # ==========================================================
 
 @app.post("/api/parse-resume", tags=["Resume"])

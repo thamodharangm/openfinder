@@ -1,8 +1,8 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "OpenFinder - LinkedIn Job Scout & Resume Matcher API",
-    "description": "Searches real-time LinkedIn hiring posts, parses candidate resume profiles, calculates skill match scores, and generates recruiter cold outreach pitches. CRITICAL PRESENTATION DIRECTIVE: Always display search results to the user strictly as a clean, horizontal Markdown table with columns: # | Company | Role | Experience | Location | Posted Time | HR Contact / Email | Direct Link. Do NOT use vertical bullet lists.",
+    "title": "OpenFinder - Universal AI LinkedIn Scout & Recruiter Intelligence API",
+    "description": "High-precision LinkedIn hiring post finder, candidate resume profile extractor, and recruiter outreach suite for ChatGPT Custom GPTs. Discovers verified /posts/ URLs with exact minute-level freshness and ATS candidate fit scoring.",
     "version": "2.0.0"
   },
   "servers": [
@@ -11,60 +11,45 @@
     }
   ],
   "paths": {
-    "/api/search-posts": {
-      "get": {
-        "summary": "Search Live LinkedIn Posts Feed",
-        "description": "Searches global LinkedIn posts/content by keyword with strict recency filters (past-24h, past-week, past-month) and extracts HR contact emails, phone numbers, and required tech stack. CRITICAL DISPLAY RULE: Always present results as a horizontal Markdown table with columns: # | Company | Role | Experience | Location | Posted Time | HR Contact / Email | Direct Link.",
-        "operationId": "searchPosts",
-        "parameters": [
-          {
-            "name": "keywords",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "Search query (e.g. 'React Developer hiring Madurai', 'MERN developer hiring')"
-          },
-          {
-            "name": "date_posted",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "past-24h",
-              "enum": ["past-1h", "past-4h", "past-12h", "past-24h", "past-7d"]
-            },
-            "description": "Exact freshness filter: 'past-1h' (last 1 hour), 'past-4h' (4 hours), 'past-12h' (12 hours), 'past-24h' (24 hours), or 'past-7d' (7 days)"
-          },
-          {
-            "name": "max_results",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "default": 10
-            },
-            "description": "Maximum number of hiring posts to retrieve"
+    "/api/upload-resume": {
+      "post": {
+        "summary": "Upload and Parse Candidate PDF Resume",
+        "description": "Uploads candidate PDF resume, extracts structured skills, experience level, and target roles, stores a persistent candidate profile in SQLite, and returns a unique candidate_profile_id.",
+        "operationId": "uploadResume",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Candidate PDF resume file"
+                  }
+                },
+                "required": ["file"]
+              }
+            }
           }
-        ],
+        },
         "responses": {
           "200": {
-            "description": "Successful retrieval of posts with pre-formatted horizontal markdown table",
+            "description": "Candidate profile successfully created",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
                     "status": { "type": "string" },
-                    "count": { "type": "integer" },
-                    "query": { "type": "string" },
-                    "date_posted": { "type": "string" },
-                    "markdown_table": { 
-                      "type": "string", 
-                      "description": "Pre-formatted clean horizontal Markdown table ready to render directly to user" 
-                    },
-                    "posts": { "type": "array" }
+                    "candidate_profile_id": { "type": "string" },
+                    "candidate_name": { "type": "string" },
+                    "seniority_level": { "type": "string" },
+                    "years_of_experience": { "type": "integer" },
+                    "primary_role": { "type": "string" },
+                    "top_skills": { "type": "array", "items": { "type": "string" } },
+                    "target_roles": { "type": "array", "items": { "type": "string" } }
                   }
                 }
               }
@@ -73,20 +58,55 @@
         }
       }
     },
-    "/api/search-hiring-posts": {
+    "/api/candidate-profile/{profile_id}": {
       "get": {
-        "summary": "Search Real-Time LinkedIn Hiring Posts",
-        "description": "Searches recent hiring posts on LinkedIn by job role or technical skills, extracts recruiter emails, apply links, and filters out spam. CRITICAL DISPLAY RULE: Always display the response as a horizontal Markdown table.",
-        "operationId": "searchHiringPosts",
+        "summary": "Retrieve Stored Candidate Profile",
+        "description": "Retrieves structured candidate skills, experience, and target roles using a candidate_profile_id.",
+        "operationId": "getCandidateProfile",
         "parameters": [
           {
-            "name": "keywords",
-            "in": "query",
+            "name": "profile_id",
+            "in": "path",
             "required": true,
             "schema": {
               "type": "string"
             },
-            "description": "Keywords such as 'React Developer', 'Python Backend', 'Product Manager'"
+            "description": "Unique candidate profile ID (e.g. 'prof_a1b2c3d4e5f6')"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Candidate profile details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "candidate_profile": { "type": "object" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/search-opportunities": {
+      "get": {
+        "summary": "Search Verified LinkedIn Recruiter Hiring Opportunities",
+        "description": "Canonical search operation. Discovers verified genuine LinkedIn hiring /posts/ with exact freshness filters, directional hiring intent, and opportunity ranking against candidate profile.",
+        "operationId": "searchOpportunities",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "default": "React Developer"
+            },
+            "description": "Job role or technical skill keywords (e.g. 'React Developer', 'MERN Stack', 'Python Backend')"
           },
           {
             "name": "location",
@@ -96,7 +116,7 @@
               "type": "string",
               "default": "India"
             },
-            "description": "Location to search (e.g. 'Madurai', 'Bangalore', 'Remote', 'India')"
+            "description": "City or Region (e.g. 'Bangalore', 'Chennai', 'Remote', 'India')"
           },
           {
             "name": "timeframe",
@@ -107,17 +127,7 @@
               "default": "past-24h",
               "enum": ["past-1h", "past-4h", "past-12h", "past-24h", "past-7d"]
             },
-            "description": "Exact freshness filter: 'past-1h' (last 1 hour), 'past-4h', 'past-12h', 'past-24h', 'past-7d'"
-          },
-          {
-            "name": "remote_only",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": false
-            },
-            "description": "Filter only remote positions"
+            "description": "Exact freshness window: 'past-1h' (last 1 hr), 'past-4h' (4 hrs), 'past-12h' (12 hrs), 'past-24h' (24 hrs), or 'past-7d' (7 days)"
           },
           {
             "name": "max_results",
@@ -127,22 +137,67 @@
               "type": "integer",
               "default": 10
             },
-            "description": "Maximum number of hiring posts to retrieve"
+            "description": "Max opportunities to return (1-30)"
+          },
+          {
+            "name": "remote_only",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "Filter for remote roles only"
+          },
+          {
+            "name": "candidate_profile_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional stored candidate profile ID for ATS skill and experience fit ranking"
           }
         ],
         "responses": {
           "200": {
-            "description": "Successful retrieval of hiring posts with pre-formatted horizontal markdown table",
+            "description": "List of ranked verified hiring posts",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
                     "status": { "type": "string" },
-                    "count": { "type": "integer" },
                     "query": { "type": "string" },
-                    "markdown_table": { "type": "string" },
-                    "posts": { "type": "array" }
+                    "location": { "type": "string" },
+                    "timeframe": { "type": "string" },
+                    "count": { "type": "integer" },
+                    "candidate_profile_id": { "type": "string" },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "company": { "type": "string" },
+                          "role": { "type": "string" },
+                          "author": { "type": "string" },
+                          "author_type": { "type": "string" },
+                          "location": { "type": "string" },
+                          "posted_time": { "type": "string" },
+                          "age_minutes": { "type": "integer" },
+                          "hiring_intent": { "type": "string" },
+                          "post_quality_score": { "type": "integer" },
+                          "candidate_match_score": { "type": "integer", "nullable": true },
+                          "final_rank_score": { "type": "integer" },
+                          "ranking_summary": { "type": "string" },
+                          "ranking_reasons": { "type": "array", "items": { "type": "string" } },
+                          "recruiter_emails": { "type": "array", "items": { "type": "string" } },
+                          "contact_numbers": { "type": "array", "items": { "type": "string" } },
+                          "skills": { "type": "array", "items": { "type": "string" } },
+                          "post_url": { "type": "string" }
+                        }
+                      }
+                    }
                   }
                 }
               }
@@ -153,8 +208,8 @@
     },
     "/api/generate-pitch": {
       "post": {
-        "summary": "Generate Customized Recruiter Cold Pitch",
-        "description": "Drafts a personalized LinkedIn DM and Email application tailored to a specific hiring post.",
+        "summary": "Generate Customized Recruiter Outreach Pitch Suite",
+        "description": "Generates 4 personalized recruiter outreach templates (LinkedIn Connection Note <300 chars, InMail, Formal Cover Email, Day-3 Follow-up).",
         "operationId": "generatePitch",
         "requestBody": {
           "required": true,
@@ -163,32 +218,49 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "post_snippet": {
+                  "job_title": {
                     "type": "string",
-                    "description": "Text or description of the LinkedIn post"
+                    "description": "Target job title (e.g. 'React Developer')"
                   },
-                  "candidate_skills": {
+                  "company_name": {
                     "type": "string",
-                    "description": "Candidate's core skills (e.g. 'React, TypeScript, Node.js')"
+                    "default": "Hiring Team",
+                    "description": "Target hiring company"
+                  },
+                  "matched_skills": {
+                    "type": "string",
+                    "default": "React, TypeScript",
+                    "description": "Comma-separated matched technical skills"
                   },
                   "candidate_name": {
                     "type": "string",
                     "default": "Candidate",
-                    "description": "Your name for sign-off"
+                    "description": "Candidate name for sign-off"
+                  },
+                  "candidate_exp_years": {
+                    "type": "integer",
+                    "default": 2,
+                    "description": "Candidate total years of experience"
                   }
                 },
-                "required": ["post_snippet"]
+                "required": ["job_title"]
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Generated pitches",
+            "description": "Outreach pitch suite generated",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "job_title": { "type": "string" },
+                    "company": { "type": "string" },
+                    "pitches": { "type": "object" }
+                  }
                 }
               }
             }
