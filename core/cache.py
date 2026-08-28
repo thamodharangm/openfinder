@@ -2,7 +2,7 @@ import sqlite3
 import json
 import time
 import threading
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from pathlib import Path
 import sys
 

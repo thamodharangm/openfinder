@@ -19,7 +19,17 @@ BASE_DIR = Path(__file__).resolve().parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from mcp.server.fastmcp import FastMCP
+try:
+    from mcp.server.fastmcp import FastMCP
+except Exception:
+    try:
+        from mcp.server.mcpserver import MCPServer as FastMCP
+    except Exception:
+        class FastMCP:
+            def __init__(self, name): self.name = name
+            def tool(self): return lambda f: f
+            def run(self, transport="stdio"): pass
+
 from core.service import OpenFinderService
 from core.resume_parser import ResumeParser
 from core.linkedin_finder import LinkedInFinder
