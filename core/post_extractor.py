@@ -124,11 +124,17 @@ class LinkedInPostExtractor:
             except Exception:
                 pass
 
+        GENERIC_BLACKLIST = [
+            "offer", "ux designers", "implement", "collaborate", "hiring", "immediate",
+            "team", "experienced", "candidates", "developer", "engineer", "designers",
+            "jobs", "process", "recruitment", "recruiting", "profile"
+        ]
+
         if author and author not in ["Hiring Manager / Recruiter", "LinkedIn Member", "Recruiter"]:
             match = re.search(r"(?:at|@)\s+([A-Za-z0-9\s&.-]+)", author)
             if match:
                 clean_name = match.group(1).strip()
-                if len(clean_name) > 2 and clean_name.lower() not in ["hiring", "immediate", "team"]:
+                if len(clean_name) > 2 and not any(b in clean_name.lower() for b in GENERIC_BLACKLIST):
                     return clean_name.title()
 
         patterns = [
@@ -147,11 +153,38 @@ class LinkedInPostExtractor:
                 ).strip()
                 if len(extracted) >= 3 and not any(
                     x in extracted.lower()
-                    for x in ["developer", "engineer", "react", "python", "fresher", "intern", "urgent"]
+                    for x in GENERIC_BLACKLIST
                 ):
                     return extracted.title()
 
         return "Hiring Team"
+
+    @staticmethod
+    def extract_location(text: str) -> str:
+        KNOWN_LOCATIONS = [
+            "Bangalore", "Bengaluru", "Chennai", "Hyderabad", "Pune", "Mumbai",
+            "Delhi", "Gurgaon", "Gurugram", "Noida", "Coimbatore", "Kochi",
+            "Trivandrum", "Vadodara", "Ahmedabad", "Kolkata", "Jaipur", "Chandigarh",
+            "Indore", "Remote", "Work From Home", "Hybrid", "India"
+        ]
+        text_lower = text.lower()
+        for loc in KNOWN_LOCATIONS:
+            if re.search(r"(?:\b|\W)" + re.escape(loc.lower()) + r"(?:\b|\W)", text_lower):
+                if loc.lower() in ["bangalore", "bengaluru"]:
+                    return "Bangalore"
+                elif loc.lower() in ["gurgaon", "gurugram"]:
+                    return "Gurgaon (Delhi-NCR)"
+                elif loc.lower() in ["work from home", "remote"]:
+                    return "Remote"
+                return loc
+
+        loc_match = re.search(r"(?:📍\s*location|location|city)\s*:\s*([A-Za-z\s,]+)", text, re.IGNORECASE)
+        if loc_match:
+            cand = loc_match.group(1).strip().split("\n")[0].split(",")[0].strip()
+            if len(cand) > 2 and cand.lower() not in ["in", "at", "as", "the", "for"]:
+                return cand.title()
+
+        return "Unspecified / Remote"
 
     @classmethod
     def _parse_html_to_post_data(
@@ -261,8 +294,7 @@ class LinkedInPostExtractor:
 
         # Company & Location
         company = cls.extract_company(full_text, emails, author)
-        loc_match = re.search(r"(?:📍\s*location|location|city|in)\s*:\s*([A-Za-z\s]+)", full_text, re.IGNORECASE)
-        location = loc_match.group(1).strip() if loc_match else "Unspecified / Remote"
+        location = cls.extract_location(full_text)
 
         # Roles
         extracted_roles = JobRoleExtractor.extract_roles(full_text, default_title=title_str.split("|")[0].strip() if title_str else "Software Engineer")
