@@ -328,7 +328,11 @@ class LinkedInFinder:
             stable_author = repo_meta.get("author") or post_data.get("author", "Hiring Recruiter")
             stable_company = repo_meta.get("company") or post_data.get("company", "Hiring Team")
             stable_role = repo_meta.get("role") or post_data.get("job_role", intent.target_role)
-            stable_location = repo_meta.get("locations", [None])[0] or post_data.get("location", "Unspecified / Remote")
+            # primary_location is the purpose-built display field; fall back to extractor location
+            stable_location = (
+                repo_meta.get("primary_location")
+                or post_data.get("location", "Unspecified / Remote")
+            )
             stable_work_mode = repo_meta.get("work_mode") or ("Remote" if "remote" in post_data.get("full_post_content", "").lower() else "On-Site")
             stable_emails = repo_meta.get("recruiter_emails") or post_data.get("recruiter_emails", [])
 

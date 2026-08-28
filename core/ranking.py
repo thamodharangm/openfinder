@@ -87,15 +87,18 @@ class OpportunityRanker:
             contact_raw += 20
         contact_score = min(100, contact_raw)
 
-        # Overall Post Quality (Intent 25%, Freshness 20%, Role 30%, Location 10%, Experience 10%, Contact 5%)
+        # Overall Post Quality (Intent 25%, Freshness 20%, Role 30%, Location 15%, Experience 5%, Contact 5%)
+        # If specific city requested and post location is a mismatch (score < 50), apply a penalty
+        loc_penalty = 25 if (target_location and target_location.lower() not in ["india", "remote", "any", ""] and loc_score < 50) else 0
+
         total_quality = int(
             (intent_score * 0.25) +
             (freshness_score * 0.20) +
             (role_score * 0.30) +
-            (loc_score * 0.10) +
-            (exp_score * 0.10) +
+            (loc_score * 0.15) +
+            (exp_score * 0.05) +
             (contact_score * 0.05)
-        )
+        ) - loc_penalty
         total_quality = max(0, min(100, total_quality))
 
         factors = {
@@ -249,9 +252,11 @@ class OpportunityRanker:
             for p in posts
         ]
 
-        # Initial deterministic sort
+        # Initial deterministic sort:
+        # If target location is a specific city, prioritize matching location posts (score >= 70) first
         evaluated_posts.sort(
             key=lambda x: (
+                (1 if (x.get("ranking_factors", {}).get("location_relevance", 100) >= 70) else 0) if (target_location and target_location.lower() not in ["india", "remote", "any", ""]) else 1,
                 x.get("final_rank_score", 0),
                 x.get("post_quality_score", 0),
                 x.get("candidate_match_score") or 0,
