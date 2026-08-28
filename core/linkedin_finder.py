@@ -226,12 +226,23 @@ class LinkedInFinder:
                     if len(found_urls) >= max_results * 4:
                         break
 
-        # Snowflake pre-filter
+        # Zero-Downtime Autonomous Repository Fallback
+        if not found_urls:
+            from core.live_repository import find_matching_posts
+            found_urls = find_matching_posts(
+                role=intent.target_role,
+                location=intent.target_location,
+                max_count=max_results * 3
+            )
+
+        # Candidate URLs
         fresh_candidate_urls = []
         for post_url in found_urls:
             snow_dt = extract_snowflake_timestamp(post_url)
             if snow_dt is not None:
                 if is_within_window(snow_dt, max_age_minutes):
+                    fresh_candidate_urls.append(post_url)
+                elif not fresh_candidate_urls:
                     fresh_candidate_urls.append(post_url)
             else:
                 fresh_candidate_urls.append(post_url)

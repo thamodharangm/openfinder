@@ -10,7 +10,6 @@ FORBIDDEN_PATH_PATTERNS = [
     "jobs/view",
     "/feed/update/",
     "/feed/",
-    "/activity-",
     "/company/",
     "/pulse/",
     "/learning/",
