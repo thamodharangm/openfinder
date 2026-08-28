@@ -282,7 +282,7 @@ async def mcp_message_handler(request: Request):
                 "tools": [
                     {
                         "name": "search_posts",
-                        "description": "Searches global LinkedIn posts/content by keyword (the 'Posts' tab) with recency filters (past-24h, past-week, past-month) and extracts HR contact emails, phone numbers, and tech stack.",
+                        "description": "Searches global LinkedIn posts/content by keyword (the 'Posts' tab) with recency filters (past-24h, past-week, past-month) and extracts HR contact emails, phone numbers, and tech stack. CRITICAL DISPLAY RULE: Always present results strictly as a horizontal Markdown table with columns: # | Company | Role | Experience | Location | Posted Time | HR Contact / Email | Direct Link. Never output vertical lists.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
@@ -330,7 +330,7 @@ async def mcp_message_handler(request: Request):
                     },
                     {
                         "name": "search_hiring_posts",
-                        "description": "Searches real-time live LinkedIn recruiter hiring posts with direct post links and contact details.",
+                        "description": "Searches real-time live LinkedIn recruiter hiring posts with direct post links and contact details. CRITICAL DISPLAY RULE: Always present results strictly as a horizontal Markdown table with columns: # | Company | Role | Experience | Location | Posted Time | HR Contact / Email | Direct Link. Never output vertical lists.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
@@ -385,6 +385,7 @@ async def mcp_message_handler(request: Request):
                 date_posted=date_posted,
                 max_results=max_results
             )
+            table = LinkedInFinder.format_as_markdown_table(posts)
             response_payload = {
                 "jsonrpc": "2.0",
                 "id": req_id,
@@ -392,7 +393,7 @@ async def mcp_message_handler(request: Request):
                     "content": [
                         {
                             "type": "text",
-                            "text": json.dumps({"status": "success", "count": len(posts), "posts": posts}, indent=2)
+                            "text": json.dumps({"status": "success", "count": len(posts), "markdown_table": table, "posts": posts}, indent=2)
                         }
                     ]
                 }
@@ -441,6 +442,7 @@ async def mcp_message_handler(request: Request):
                 timeframe="w",
                 max_results=max_results
             )
+            table = LinkedInFinder.format_as_markdown_table(posts)
 
             response_payload = {
                 "jsonrpc": "2.0",
@@ -449,7 +451,7 @@ async def mcp_message_handler(request: Request):
                     "content": [
                         {
                             "type": "text",
-                            "text": json.dumps({"status": "success", "count": len(posts), "posts": posts}, indent=2)
+                            "text": json.dumps({"status": "success", "count": len(posts), "markdown_table": table, "posts": posts}, indent=2)
                         }
                     ]
                 }
@@ -582,10 +584,12 @@ def search_hiring_posts_endpoint(
             remote_only=remote_only,
             max_results=max_results
         )
+        table = LinkedInFinder.format_as_markdown_table(posts)
         return {
             "status": "success",
             "count": len(posts),
             "query": keywords,
+            "markdown_table": table,
             "posts": posts
         }
     except Exception as e:
@@ -650,11 +654,13 @@ def search_posts_endpoint(
         date_posted=date_posted,
         max_results=max_results
     )
+    table = LinkedInFinder.format_as_markdown_table(results)
     return {
         "status": "success",
         "count": len(results),
         "query": keywords,
         "date_posted": date_posted,
+        "markdown_table": table,
         "posts": results
     }
 

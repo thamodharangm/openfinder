@@ -129,6 +129,10 @@ def search_linkedin_hiring(
     Searches recent genuine LinkedIn hiring posts with extracted company names, 
     work mode (Remote/Hybrid/Onsite), salary hints, and apply links.
     
+    CRITICAL DISPLAY RULE: Always present results as a clean, horizontal Markdown table with columns:
+    # | Company | Role | Experience | Location | Posted Time | HR Contact / Email | Direct Link.
+    Do NOT output vertical bullet lists.
+    
     Args:
         keywords: Job role or skills (e.g. 'React Developer', 'Python Backend').
         location: City or Country (e.g. 'Bangalore', 'Remote', 'India').
@@ -144,10 +148,12 @@ def search_linkedin_hiring(
             remote_only=remote_only,
             max_results=max_results
         )
+        table = LinkedInFinder.format_as_markdown_table(posts)
         return {
             "status": "success",
             "count": len(posts),
             "query": keywords,
+            "markdown_table": table,
             "posts": posts
         }
     except Exception as e:
@@ -201,6 +207,17 @@ def parse_linkedin_post(
         candidate_name: Your name for the pitch sign-off.
         candidate_exp_years: Your years of experience.
     """
+    try:
+        data = LinkedInPostExtractor.extract_from_url(
+            url=post_url,
+            candidate_name=candidate_name,
+            candidate_exp_years=candidate_exp_years
+        )
+        return {"status": "success", "post": data}
+    except Exception as e:
+        return {"error": f"Failed to parse post URL: {str(e)}"}
+
+
 @mcp.tool()
 def search_posts(
     keywords: str,
@@ -208,7 +225,11 @@ def search_posts(
     max_results: int = 10
 ) -> Dict[str, Any]:
     """
-    Search LinkedIn posts/content globally by keyword (the "Posts" tab) with an optional recency filter.
+    Search LinkedIn posts/content globally by keyword (the 'Posts' tab) with an optional recency filter.
+    
+    CRITICAL DISPLAY RULE: Always present the search results to the user as a clean, horizontal Markdown table with columns: 
+    # | Company | Role | Experience | Location | Posted Time | HR Contact / Email | Direct Link.
+    Do NOT output vertical bullet lists.
     
     Args:
         keywords: Search query (e.g. 'React Developer hiring Bangalore', 'looking for MERN developer').
@@ -221,11 +242,13 @@ def search_posts(
         date_posted=date_posted,
         max_results=max_results
     )
+    table = LinkedInFinder.format_as_markdown_table(results)
     return {
         "status": "success",
         "count": len(results),
         "query": keywords,
         "date_posted": date_posted,
+        "markdown_table": table,
         "posts": results
     }
 

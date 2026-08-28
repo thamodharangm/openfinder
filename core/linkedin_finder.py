@@ -53,6 +53,46 @@ class LinkedInFinder:
         # Strictly require genuine personal/company social post paths
         return bool('/posts/' in url_lower or '/feed/update/' in url_lower or 'activity-' in url_lower or 'lnkd.in/p/' in url_lower)
 
+    @staticmethod
+    def format_as_markdown_table(posts: List[Dict[str, Any]]) -> str:
+        """
+        Formats a list of hiring posts into a clean, horizontal Markdown table.
+        Columns: # | Company | Role | Experience | Location | Posted Time | HR Contact / Email | Direct Link
+        """
+        if not posts:
+            return "No posts found matching the criteria."
+
+        headers = ["#", "Company", "Role", "Experience", "Location", "Posted Time", "HR Contact / Email", "Direct Link"]
+        alignments = [":---:", "---", "---", ":---:", "---", ":---:", "---", ":---:"]
+        
+        lines = [
+            "| " + " | ".join(headers) + " |",
+            "| " + " | ".join(alignments) + " |"
+        ]
+
+        for idx, p in enumerate(posts, 1):
+            company = str(p.get("company") or "Hiring Team").replace("|", "-").strip()
+            role = str(p.get("role") or p.get("job_role") or "Developer").replace("|", "-").strip()
+            exp = str(p.get("experience_required") or p.get("experience") or "1–2 Yrs").replace("|", "-").strip()
+            loc = str(p.get("location") or "Unspecified / Remote").replace("|", "-").strip()
+            posted = str(p.get("posted_time") or "Recently").replace("|", "-").strip()
+
+            emails = p.get("recruiter_emails") or []
+            phones = p.get("contact_phones") or p.get("contact_numbers") or []
+            contacts = []
+            if emails:
+                contacts.extend([f"`{e}`" for e in emails[:2]])
+            if phones:
+                contacts.extend([f"`{ph}`" for ph in phones[:1]])
+            contact_str = ", ".join(contacts) if contacts else "In Post"
+
+            url = p.get("post_url", "")
+            link_str = f"[View Post]({url})" if url else "N/A"
+
+            lines.append(f"| {idx} | **{company}** | {role} | {exp} | {loc} | {posted} | {contact_str} | {link_str} |")
+
+        return "\n".join(lines)
+
     def clean_linkedin_url(self, raw_url: str) -> str:
         """
         Decodes redirect wrappers into clean LinkedIn post URLs.

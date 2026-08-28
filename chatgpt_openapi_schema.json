@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "OpenFinder - LinkedIn Job Scout & Resume Matcher API",
-    "description": "Searches real-time LinkedIn hiring posts, parses candidate resume profiles, calculates skill match scores, and generates recruiter cold outreach pitches.",
-    "version": "1.0.0"
+    "description": "Searches real-time LinkedIn hiring posts, parses candidate resume profiles, calculates skill match scores, and generates recruiter cold outreach pitches. CRITICAL PRESENTATION DIRECTIVE: Always display search results to the user strictly as a clean, horizontal Markdown table with columns: # | Company | Role | Experience | Location | Posted Time | HR Contact / Email | Direct Link. Do NOT use vertical bullet lists.",
+    "version": "2.0.0"
   },
   "servers": [
     {
@@ -11,10 +11,72 @@
     }
   ],
   "paths": {
+    "/api/search-posts": {
+      "get": {
+        "summary": "Search Live LinkedIn Posts Feed",
+        "description": "Searches global LinkedIn posts/content by keyword with strict recency filters (past-24h, past-week, past-month) and extracts HR contact emails, phone numbers, and required tech stack. CRITICAL DISPLAY RULE: Always present results as a horizontal Markdown table with columns: # | Company | Role | Experience | Location | Posted Time | HR Contact / Email | Direct Link.",
+        "operationId": "searchPosts",
+        "parameters": [
+          {
+            "name": "keywords",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Search query (e.g. 'React Developer hiring Madurai', 'MERN developer hiring')"
+          },
+          {
+            "name": "date_posted",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "past-week",
+              "enum": ["past-24h", "past-week", "past-month"]
+            },
+            "description": "Recency filter: 'past-24h' (last 24 hours), 'past-week' (last 7 days), or 'past-month'"
+          },
+          {
+            "name": "max_results",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 10
+            },
+            "description": "Maximum number of hiring posts to retrieve"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful retrieval of posts with pre-formatted horizontal markdown table",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "count": { "type": "integer" },
+                    "query": { "type": "string" },
+                    "date_posted": { "type": "string" },
+                    "markdown_table": { 
+                      "type": "string", 
+                      "description": "Pre-formatted clean horizontal Markdown table ready to render directly to user" 
+                    },
+                    "posts": { "type": "array" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/search-hiring-posts": {
       "get": {
         "summary": "Search Real-Time LinkedIn Hiring Posts",
-        "description": "Searches recent hiring posts on LinkedIn by job role or technical skills, extracts recruiter emails, apply links, and filters out spam.",
+        "description": "Searches recent hiring posts on LinkedIn by job role or technical skills, extracts recruiter emails, apply links, and filters out spam. CRITICAL DISPLAY RULE: Always display the response as a horizontal Markdown table.",
         "operationId": "searchHiringPosts",
         "parameters": [
           {
@@ -34,7 +96,7 @@
               "type": "string",
               "default": "India"
             },
-            "description": "Location to search (e.g. 'Bangalore', 'Remote', 'India', 'United States')"
+            "description": "Location to search (e.g. 'Madurai', 'Bangalore', 'Remote', 'India')"
           },
           {
             "name": "timeframe",
@@ -69,11 +131,18 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful retrieval of hiring posts",
+            "description": "Successful retrieval of hiring posts with pre-formatted horizontal markdown table",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "count": { "type": "integer" },
+                    "query": { "type": "string" },
+                    "markdown_table": { "type": "string" },
+                    "posts": { "type": "array" }
+                  }
                 }
               }
             }

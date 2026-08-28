@@ -71,23 +71,8 @@ Examples:
             return
 
         print(f"✅ Found {len(posts)} Posts:\n")
-        for idx, p in enumerate(posts, 1):
-            role = p.get('job_role') or p.get('role') or 'Post'
-            print(f"[{idx}] {role} by {p.get('author')}")
-            print(f"    🏢 Company: {p.get('company')} | 📍 Location: {p.get('location')}")
-            if p.get("posted_time"):
-                print(f"    🕒 Posted: {p.get('posted_time')}")
-            emails = p.get("recruiter_emails") or []
-            if emails:
-                print(f"    📧 Email: {', '.join(emails)}")
-            phones = p.get("contact_phones") or p.get("contact_numbers") or []
-            if phones:
-                print(f"    📞 Phone: {', '.join(phones)}")
-            skills = p.get("skills") or p.get("detected_skills") or []
-            if skills:
-                print(f"    🛠️ Skills: {', '.join(skills)}")
-            print(f"    🔗 Post URL: {p.get('post_url')}")
-            print("-" * 65)
+        print(LinkedInFinder.format_as_markdown_table(posts))
+        print("\n" + "=" * 65)
         return
 
     # Mode 0: Direct LinkedIn Post URL Extractor
@@ -212,15 +197,8 @@ Examples:
             return
 
         print(f"✅ Found {len(posts)} Verified Live Recruiter Posts:\n")
-        for idx, post in enumerate(posts, 1):
-            print(f"[{idx}] {post['title']}")
-            print(f"    👤 Recruiter: {post['company']} | 📍 Mode: {post['work_mode']}")
-            if post.get("required_skills"):
-                print(f"    🛠️ Skills: {', '.join(post['required_skills'])}")
-            if post.get("contact_emails"):
-                print(f"    📧 Email: {', '.join(post['contact_emails'])}")
-            print(f"    🔗 Post URL: {post['post_url']}")
-            print("-" * 65)
+        print(LinkedInFinder.format_as_markdown_table(posts))
+        print("\n" + "=" * 65)
 
 
 if __name__ == "__main__":
