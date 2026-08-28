@@ -20,6 +20,7 @@ from core.time_utils import (
     calculate_age,
     FRESHNESS_WINDOWS
 )
+from core.search_intent import SearchIntentParser, SearchIntent
 from core.post_extractor import LinkedInPostExtractor
 from config import COMMON_SKILLS
 
@@ -30,7 +31,7 @@ class LinkedInSessionSearch:
     using an authenticated user session cookie (li_at, JSESSIONID).
     
     Strictly discovers ONLY genuine /posts/ URLs, enforces minute-level freshness,
-    and filters for verified recruiter/founder HIRING intent.
+    verified HIRING intent, and high-precision role matching.
     """
 
     HEADERS = {
@@ -78,7 +79,8 @@ class LinkedInSessionSearch:
     ) -> List[Dict[str, Any]]:
         """
         Executes internal LinkedIn Posts tab search with authenticated session.
-        Guarantees ONLY /posts/ URLs, exact minute-level freshness, and genuine HIRING intent.
+        Guarantees ONLY /posts/ URLs, exact minute-level freshness, genuine HIRING intent,
+        and strict role precision filtering.
         """
         cookies = cls.get_cookies_dict()
         if "li_at" not in cookies:
@@ -86,10 +88,14 @@ class LinkedInSessionSearch:
 
         skills_taxonomy = skills_taxonomy or COMMON_SKILLS
         
-        try:
-            max_age_minutes = get_max_age_minutes(date_posted)
-        except ValueError:
-            max_age_minutes = FRESHNESS_WINDOWS["past-24h"]
+        # 1. Parse Search Intent
+        intent = SearchIntentParser.parse(
+            keywords=target_role or keywords,
+            location=target_location or "India",
+            timeframe=date_posted
+        )
+
+        max_age_minutes = intent.max_age_minutes
 
         # Map to LinkedIn's native query parameter
         if max_age_minutes <= 1440:  # <= 24h
@@ -97,13 +103,7 @@ class LinkedInSessionSearch:
         else:
             tf_param = "%22past-week%22"
 
-        # Ensure keywords have hiring intent
-        clean_kw = keywords.strip()
-        if "hiring" not in clean_kw.lower() and "looking for" not in clean_kw.lower():
-            search_query_str = f"{clean_kw} hiring"
-        else:
-            search_query_str = clean_kw
-
+        search_query_str = intent.generate_session_keywords()
         encoded_kw = urllib.parse.quote(search_query_str)
         url = f"https://www.linkedin.com/search/results/content/?keywords={encoded_kw}&datePosted={tf_param}&sortBy=%22date_posted%22"
 
@@ -142,7 +142,8 @@ class LinkedInSessionSearch:
 
         results = []
 
-        for p_url in discovered_post_urls:
+        # Candidate budget: evaluate top 20 fresh candidates
+        for p_url in discovered_post_urls[:25]:
             if len(results) >= max_results:
                 break
 
@@ -157,15 +158,21 @@ class LinkedInSessionSearch:
                 url=p_url,
                 skills_taxonomy=skills_taxonomy,
                 max_age_minutes=max_age_minutes,
-                target_role=target_role or keywords,
-                target_location=target_location
+                target_role=intent.target_role,
+                target_location=intent.target_location
             )
 
-            # Strict Phase 2 filter: Must be success, must be HIRING, must not be SPAM
+            # Strict Phase 1/2 filters: Must be success, must be HIRING, must not be SPAM
             if not post_data or post_data.get("status") != "success":
                 continue
 
             if post_data.get("hiring_intent") != "HIRING":
+                continue
+
+            # 3. Phase 3 Precision Filter: Role match score threshold for specialized roles
+            role_score = post_data.get("role_match_score", 0)
+            if intent.role_family != "GENERAL_SOFTWARE" and role_score < 50:
+                # Drop unrelated posts (e.g. ColdFusion for React)
                 continue
 
             # Record post as seen globally
@@ -175,7 +182,9 @@ class LinkedInSessionSearch:
             pitch_note = post_data.get("tailored_outreach_pitches", {}).get("linkedin_connection_note_300_chars", "")
             
             compact_item = {
+                "title": post_data.get("job_role", "Software Engineer"),
                 "role": post_data.get("job_role", "Software Engineer"),
+                "extracted_roles": post_data.get("extracted_roles", []),
                 "author": post_data.get("author", "Hiring Recruiter"),
                 "author_type": post_data.get("author_type", "RECRUITER"),
                 "company": post_data.get("company", "Hiring Team"),
@@ -186,13 +195,16 @@ class LinkedInSessionSearch:
                 "posted_time": post_data.get("age_text", "Recently"),
                 "hiring_intent": post_data.get("hiring_intent", "HIRING"),
                 "hiring_confidence": post_data.get("hiring_confidence", 0.9),
-                "role_match_score": post_data.get("role_match_score", 90),
+                "role_match_score": role_score,
+                "role_match_reason": post_data.get("role_match_reason", ""),
                 "location_match_score": post_data.get("location_match_score", 100),
                 "experience_match_score": post_data.get("experience_match_score", 75),
                 "post_quality_score": post_data.get("post_quality_score", 85),
                 "is_spam": False,
                 "recruiter_emails": post_data.get("recruiter_emails", []),
+                "contact_emails": post_data.get("recruiter_emails", []),
                 "contact_phones": post_data.get("contact_numbers", []),
+                "contact_numbers": post_data.get("contact_numbers", []),
                 "skills": post_data.get("detected_skills", []),
                 "post_url": p_url,
                 "connection_pitch": pitch_note

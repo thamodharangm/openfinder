@@ -62,10 +62,19 @@ class SearchCache:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    "INSERT OR REPLACE INTO search_cache (query_key, data_json, timestamp) VALUES (?, ?, ?)",
-                    (query_key.lower().strip(), json.dumps(data), time.time())
-                )
+                cursor.execute("""
+                    INSERT OR REPLACE INTO search_cache (query_key, data_json, timestamp)
+                    VALUES (?, ?, ?)
+                """, (query_key.lower().strip(), json.dumps(data), time.time()))
+                conn.commit()
+        except Exception:
+            pass
+
+    def clear(self):
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM search_cache")
                 conn.commit()
         except Exception:
             pass

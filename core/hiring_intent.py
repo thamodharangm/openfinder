@@ -1,11 +1,58 @@
 import re
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Set
 import sys
 from pathlib import Path
 
 # Add root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.spam_filter import is_spam_or_bait
+
+
+class JobRoleExtractor:
+    """
+    Extracts structured job roles from LinkedIn post text using multiple strategies:
+    1. Labeled key-value patterns (Position:, Role:, Job Title:, etc.)
+    2. Declarative hiring statements (Looking for a ..., Hiring for ..., etc.)
+    3. Multi-role bullet lists (• React Developer, - Node.js Developer, etc.)
+    """
+
+    ROLE_PATTERNS = [
+        r"(?:position|role|job\s+title|profile|designation)\s*:\s*([^\n.,|;!#]+)",
+        r"(?:hiring|urgent\s+opening|openings?|vacanc(?:y|ies))\s+(?:for\s+)?([^\n.,|;!#]+)",
+        r"(?:looking\s+(?:for|to\s+hire)\s+(?:a|an|[0-9]+)?)\s*([A-Za-z0-9.+/\-\s]+(?:developer|engineer|lead|specialist|architect|intern|fresher|consultant|tester))",
+        r"(?:need|require[sd]?)\s+(?:a|an|[0-9]+)?\s*([A-Za-z0-9.+/\-\s]+(?:developer|engineer|lead))",
+    ]
+
+    BULLET_ROLE_PATTERN = r"(?:^|\n)\s*[-•*–]\s*([A-Za-z0-9.+/\-\s]+(?:developer|engineer|tester|designer|lead|architect))"
+
+    @classmethod
+    def extract_roles(cls, text: str, default_title: str = "Software Engineer") -> List[str]:
+        if not text:
+            return [default_title]
+
+        roles: List[str] = []
+
+        # 1. Check bullet points
+        bullet_matches = re.findall(cls.BULLET_ROLE_PATTERN, text, re.IGNORECASE)
+        for b in bullet_matches:
+            clean_b = b.strip().title()
+            if len(clean_b) > 3 and clean_b not in roles:
+                roles.append(clean_b)
+
+        # 2. Check standard patterns
+        for pattern in cls.ROLE_PATTERNS:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            for m in matches:
+                clean_m = re.sub(r'\s+', ' ', m).strip().title()
+                # Clean invalid fragments
+                clean_m = re.split(r'(?:\sat\s|\sin\s|\swith\s|📍|experience|exp)', clean_m, flags=re.IGNORECASE)[0].strip()
+                if len(clean_m) >= 4 and clean_m not in roles and clean_m.lower() not in {"an immediate", "urgent joiners", "candidates", "team", "the team"}:
+                    roles.append(clean_m)
+
+        if not roles:
+            return [default_title]
+
+        return roles
 
 
 class HiringIntentClassifier:
@@ -80,25 +127,18 @@ class HiringIntentClassifier:
 
     @classmethod
     def detect_author_type(cls, author_headline: str = "", author_name: str = "") -> str:
-        """
-        Classifies author type based on headline/title or author text.
-        Supported: RECRUITER, FOUNDER, HIRING_MANAGER, HR, JOB_SEEKER, EMPLOYEE, UNKNOWN.
-        """
         combined = f"{author_headline} {author_name}".lower().strip()
         if not combined:
             return "UNKNOWN"
 
-        # Check Job Seeker first
         for signal in cls.JOB_SEEKER_HEADLINES:
             if signal in combined:
                 return "JOB_SEEKER"
 
-        # Check Founder
         for signal in cls.FOUNDER_HEADLINES:
             if re.search(r"\b" + re.escape(signal) + r"\b", combined):
                 return "FOUNDER"
 
-        # Check Recruiter / HR
         if "hr" in combined.split() or any(re.search(r"\b" + re.escape(s) + r"\b", combined) for s in ["hr", "human resources", "hr manager", "hr executive", "hrbp", "people operations"]):
             return "HR"
 
@@ -106,7 +146,6 @@ class HiringIntentClassifier:
             if re.search(r"\b" + re.escape(signal) + r"\b", combined):
                 return "RECRUITER"
 
-        # Check Hiring Manager / Engineering Lead
         for signal in cls.HIRING_MANAGER_HEADLINES:
             if re.search(r"\b" + re.escape(signal) + r"\b", combined):
                 return "HIRING_MANAGER"
@@ -123,18 +162,6 @@ class HiringIntentClassifier:
         author_headline: str = "",
         author_name: str = ""
     ) -> Dict[str, Any]:
-        """
-        Main classification entrypoint.
-        Returns:
-            {
-                "intent": "HIRING" | "JOB_SEEKER" | "NON_HIRING" | "AMBIGUOUS",
-                "confidence": float,
-                "signals": List[str],
-                "author_type": str,
-                "is_hiring": bool,
-                "is_spam": bool
-            }
-        """
         if not text:
             return {
                 "intent": "NON_HIRING",
@@ -221,7 +248,6 @@ class HiringIntentClassifier:
 
         confidence = min(1.0, round(hiring_score, 2))
 
-        # Classification decision threshold
         if hiring_score >= 0.50:
             return {
                 "intent": "HIRING",
@@ -253,7 +279,11 @@ class HiringIntentClassifier:
 
 class RoleRelevanceMatcher:
     """
-    Computes a deterministic role match score (0–100) between user target role and post role.
+    Computes deterministic role relevance scores (0–100) and explanations.
+    Features:
+      1. Exact and normalized title matching
+      2. Multi-role detection (e.g. React Developer listed in a multi-hire post)
+      3. Negative technology dominance penalties
     """
 
     ROLE_SYNONYMS = {
@@ -268,87 +298,124 @@ class RoleRelevanceMatcher:
         "vue": ["vue", "vue.js", "vuejs", "frontend", "front-end"],
     }
 
+    CONFUSTION_STACKS = {
+        "react": ["coldfusion", "php", "laravel", "django", "java", "spring", "dotnet", "c#", "ruby", "rails", "sap", "oracle", "devops", "sre", "qa", "tester"],
+        "node": ["coldfusion", "php", "django", "java", "dotnet", "c#", "sap", "devops", "qa"],
+        "python": ["php", "coldfusion", "java", "dotnet", "c#", "ruby", "devops"],
+        "java": ["php", "coldfusion", "python", "ruby", "dotnet", "devops"],
+    }
+
     @classmethod
-    def calculate_score(cls, target_role: str, post_role: str, post_content: str = "") -> int:
+    def calculate_score_with_reason(
+        cls,
+        target_role: str,
+        post_role: str,
+        post_content: str = "",
+        extracted_roles: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
         if not target_role:
-            return 80
+            return {"score": 80, "reason": "No target role specified; generic developer baseline"}
 
         target_clean = target_role.lower().strip()
         post_clean = (post_role or "").lower().strip()
         content_clean = (post_content or "").lower()
 
-        # 1. Exact Match
-        if target_clean == post_clean:
-            return 100
+        # 1. Check all extracted roles in multi-role posts
+        all_candidate_roles = [post_clean]
+        if extracted_roles:
+            all_candidate_roles.extend([r.lower().strip() for r in extracted_roles])
 
-        # Normalize common prefixes/suffixes
+        # Exact Match in any extracted role
+        for cr in all_candidate_roles:
+            if target_clean == cr:
+                return {"score": 100, "reason": f"Exact match for '{target_role}'"}
+
+        # 2. Check Variant Normalization (e.g. React.js Developer vs React Developer)
         t_core = re.sub(r'\b(developer|engineer|lead|senior|junior|fresher|specialist|stack)\b', '', target_clean).strip()
-        p_core = re.sub(r'\b(developer|engineer|lead|senior|junior|fresher|specialist|stack)\b', '', post_clean).strip()
+        for cr in all_candidate_roles:
+            p_core = re.sub(r'\b(developer|engineer|lead|senior|junior|fresher|specialist|stack)\b', '', cr).strip()
+            if t_core and (t_core == p_core or t_core in cr or p_core in target_clean):
+                return {"score": 95, "reason": f"Standardized title variant for '{target_role}' ({cr.title()})"}
 
-        if t_core and (t_core == p_core or t_core in post_clean or p_core in target_clean):
-            return 95
-
-        # 2. Check Tech Tokens Overlap
-        target_tokens = set(re.findall(r'\b[a-zA-Z0-9.+]+', target_clean))
-        post_tokens = set(re.findall(r'\b[a-zA-Z0-9.+]+', post_clean))
-        content_tokens = set(re.findall(r'\b[a-zA-Z0-9.+]+', content_clean))
-
+        # 3. Check Tech Tokens Overlap
+        target_tokens = set(re.findall(r'[a-zA-Z0-9.+]+', target_clean))
         generic_words = {"developer", "engineer", "lead", "senior", "junior", "specialist", "stack", "full", "software"}
         tech_target = target_tokens - generic_words
-        tech_post = post_tokens - generic_words
 
-        # Direct tech overlap
-        if tech_target and tech_post and tech_target.intersection(tech_post):
-            return 90
+        # Check if requested tech is absent but conflicting tech dominates
+        for tech_key, neg_list in cls.CONFUSTION_STACKS.items():
+            if tech_key in target_clean:
+                has_target_in_roles = any(tech_key in cr for cr in all_candidate_roles)
+                found_neg_in_roles = [neg for neg in neg_list if any(neg in cr for cr in all_candidate_roles)]
+                if not has_target_in_roles and found_neg_in_roles:
+                    return {
+                        "score": 15,
+                        "reason": f"Unrelated {found_neg_in_roles[0].capitalize()} role; requested {target_role} is absent"
+                    }
+                
+                has_target_tech = (tech_key in post_clean or tech_key in content_clean)
+                found_neg = [neg for neg in neg_list if neg in post_clean or neg in content_clean]
+                if not has_target_tech and found_neg:
+                    return {
+                        "score": 15,
+                        "reason": f"Unrelated {found_neg[0].capitalize()} role; requested {target_role} is absent"
+                    }
 
-        # Check domain synonym groups (e.g. react in target and mern in post)
-        synonym_match_found = False
+        # Check direct tech token overlap in extracted roles
+        for cr in all_candidate_roles:
+            post_tokens = set(re.findall(r'[a-zA-Z0-9.+]+', cr))
+            tech_post = post_tokens - generic_words
+            if tech_target and tech_post and tech_target.intersection(tech_post):
+                return {"score": 90, "reason": f"Tech stack overlap in role '{cr.title()}'"}
+
+        # 4. Check domain synonym groups (e.g. react in target and mern in post)
         for syn_key, syn_list in cls.ROLE_SYNONYMS.items():
             has_target_syn = any(syn in target_clean for syn in syn_list)
-            has_post_syn = any(syn in post_clean for syn in syn_list)
-            if has_target_syn and has_post_syn:
-                synonym_match_found = True
-                break
+            for cr in all_candidate_roles:
+                has_post_syn = any(syn in cr for syn in syn_list)
+                if has_target_syn and has_post_syn:
+                    return {"score": 80, "reason": f"Related role domain '{cr.title()}' ({syn_key.upper()})"}
 
-        if synonym_match_found:
-            return 80
-
-        # Check content overlap with tech tokens
+        # 5. Check Content Tech Overlap
+        content_tokens = set(re.findall(r'[a-zA-Z0-9.+]+', content_clean))
         if tech_target and tech_target.intersection(content_tokens):
-            return 70
+            return {"score": 70, "reason": f"Required tech stack '{list(tech_target)[0]}' found in post description"}
 
-        # Conflicting/different technical domain
-        if tech_target and tech_post and not tech_target.intersection(tech_post):
-            return 25
+        # 6. Generic overlap only
+        return {"score": 25, "reason": f"Generic title overlap without required {target_role} skills"}
 
-        return 40
+    @classmethod
+    def calculate_score(cls, target_role: str, post_role: str, post_content: str = "") -> int:
+        res = cls.calculate_score_with_reason(target_role, post_role, post_content)
+        return res["score"]
 
 
 class LocationRelevanceMatcher:
     """
     Normalizes and computes location alignment (EXACT, REGIONAL, REMOTE, UNKNOWN, MISMATCH).
+    Supports Bangalore tech hubs (Electronic City, Whitefield, Hebbal, Koramangala, etc.).
     """
 
     CITY_PRIMARY_SYNONYMS = {
-        "bangalore": {"bangalore", "bengaluru"},
-        "chennai": {"chennai", "madras"},
-        "mumbai": {"mumbai", "bombay"},
+        "bangalore": {"bangalore", "bengaluru", "electronic city", "whitefield", "koramangala", "indiranagar", "hebbal", "hsr layout", "marathahalli"},
+        "chennai": {"chennai", "madras", "omr", "sholinganallur", "guindy", "t nagar", "velachery"},
+        "mumbai": {"mumbai", "bombay", "navi mumbai", "thane", "andheri", "bandra"},
         "gurgaon": {"gurgaon", "gurugram"},
-        "delhi": {"delhi", "noida", "gurgaon", "gurugram", "ncr"},
-        "hyderabad": {"hyderabad", "secunderabad"},
-        "pune": {"pune"},
+        "delhi": {"delhi", "noida", "gurgaon", "gurugram", "ncr", "faridabad"},
+        "hyderabad": {"hyderabad", "secunderabad", "hitec city", "gachibowli", "madhapur"},
+        "pune": {"pune", "hinjewadi", "magarpatta", "kharadi"},
         "madurai": {"madurai"},
-        "coimbatore": {"coimbatore"},
+        "coimbatore": {"coimbatore", "peelamedu", "saravanampatti"},
     }
 
     LOCATION_REGIONS = {
-        "bangalore": {"bangalore", "bengaluru", "karnataka", "electronic city", "whitefield", "koramangala", "indiranagar"},
-        "chennai": {"chennai", "madras", "tamil nadu", "omr", "sholinganallur", "guindy", "t nagar"},
-        "madurai": {"madurai", "tamil nadu", "south tamil nadu"},
+        "bangalore": {"bangalore", "bengaluru", "karnataka"},
+        "chennai": {"chennai", "madras", "tamil nadu"},
+        "madurai": {"madurai", "tamil nadu"},
         "coimbatore": {"coimbatore", "tamil nadu"},
-        "hyderabad": {"hyderabad", "telangana", "hitec city", "gachibowli", "secunderabad"},
-        "mumbai": {"mumbai", "bombay", "maharashtra", "navi mumbai", "thane", "andheri", "bandra"},
-        "pune": {"pune", "maharashtra", "hinjewadi", "magarpatta"},
+        "hyderabad": {"hyderabad", "telangana"},
+        "mumbai": {"mumbai", "bombay", "maharashtra"},
+        "pune": {"pune", "maharashtra"},
         "delhi": {"delhi", "ncr", "noida", "gurgaon", "gurugram", "faridabad"},
     }
 
@@ -358,11 +425,9 @@ class LocationRelevanceMatcher:
         post_loc = (post_location or "").lower().strip()
         content = (post_content or "").lower()
 
-        # If user target is generic "India" or empty
         if not target or target == "india":
             return {"match_type": "EXACT", "score": 100, "normalized": "India"}
 
-        # Check Remote
         if "remote" in target or "remote" in post_loc or "wfh" in post_loc or "work from home" in content:
             return {"match_type": "REMOTE", "score": 95, "normalized": "Remote / WFH"}
 
@@ -370,24 +435,21 @@ class LocationRelevanceMatcher:
         if target in post_loc or post_loc in target:
             return {"match_type": "EXACT", "score": 100, "normalized": target.capitalize()}
 
-        # Primary City Synonyms Exact Match (e.g. Bangalore == Bengaluru)
+        # Primary City & Hub Synonyms Match (e.g. Bangalore == Bengaluru == Electronic City)
         for city_key, city_syns in cls.CITY_PRIMARY_SYNONYMS.items():
             if target in city_syns or any(syn in target for syn in city_syns):
-                if any(syn in post_loc for syn in city_syns):
+                if any(syn in post_loc for syn in city_syns) or any(syn in content for syn in city_syns):
                     return {"match_type": "EXACT", "score": 100, "normalized": city_key.capitalize()}
 
-        # Regional check (e.g. Bangalore vs Karnataka, or Madurai vs Chennai/Tamil Nadu)
+        # Regional check (e.g. Bangalore vs Karnataka, or Madurai vs Tamil Nadu)
         for city_key, aliases in cls.LOCATION_REGIONS.items():
             if target in aliases or any(alias in target for alias in aliases):
-                # Check if post location mentions any alias in the region
                 if any(alias in post_loc for alias in aliases) or any(alias in content for alias in aliases):
                     return {"match_type": "REGIONAL", "score": 75, "normalized": f"Regional ({city_key.capitalize()})"}
 
-        # Unknown
         if not post_loc or post_loc in ["unspecified / remote", "unspecified", "india"]:
             return {"match_type": "UNKNOWN", "score": 50, "normalized": "Unspecified"}
 
-        # Mismatch
         return {"match_type": "MISMATCH", "score": 15, "normalized": post_loc.title()}
 
 
@@ -402,8 +464,14 @@ class ExperienceRelevanceMatcher:
             return {"fit": "UNKNOWN", "score": 75, "min_exp": 0, "max_exp": 3}
 
         exp_lower = required_exp_str.lower()
-        if "fresher" in exp_lower or "0-" in exp_lower or "0 year" in exp_lower:
+        if "fresher" in exp_lower or "0-" in exp_lower or "0 to 1" in exp_lower or "0 year" in exp_lower:
             min_exp, max_exp = 0, 1
+        elif "junior" in exp_lower:
+            min_exp, max_exp = 0, 2
+        elif "senior" in exp_lower:
+            min_exp, max_exp = 4, 8
+        elif "lead" in exp_lower or "principal" in exp_lower:
+            min_exp, max_exp = 7, 12
         else:
             numbers = [int(n) for n in re.findall(r'\b\d+\b', required_exp_str)]
             if len(numbers) >= 2:
@@ -428,11 +496,11 @@ class ExperienceRelevanceMatcher:
 class QualityScorer:
     """
     Computes overall Post Quality Score and final ranking score.
-    Formula:
+    Phase 3 Formula (Weighted for High Role Precision):
       Hiring intent        25%
-      Freshness            25%
-      Role relevance       20%
-      Location relevance   15%
+      Freshness            20%
+      Role relevance       30%
+      Location relevance   10%
       Experience relevance 10%
       Contact richness      5%
     """
@@ -453,18 +521,18 @@ class QualityScorer:
         # 1. Hiring Intent (25%)
         intent_pts = hiring_confidence * 100 * 0.25
 
-        # 2. Freshness (25%)
+        # 2. Freshness (20%)
         if max_age_minutes > 0 and age_minutes >= 0:
             freshness_ratio = max(0.0, 1.0 - (age_minutes / max_age_minutes))
         else:
             freshness_ratio = 0.5
-        freshness_pts = freshness_ratio * 100 * 0.25
+        freshness_pts = freshness_ratio * 100 * 0.20
 
-        # 3. Role Relevance (20%)
-        role_pts = role_score * 0.20
+        # 3. Role Relevance (30%) - Higher weight to reject unrelated roles
+        role_pts = role_score * 0.30
 
-        # 4. Location Relevance (15%)
-        location_pts = location_score * 0.15
+        # 4. Location Relevance (10%)
+        location_pts = location_score * 0.10
 
         # 5. Experience Relevance (10%)
         exp_pts = experience_score * 0.10

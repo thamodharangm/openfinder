@@ -19,6 +19,7 @@ from core.time_utils import (
     FRESHNESS_WINDOWS
 )
 from core.hiring_intent import (
+    JobRoleExtractor,
     HiringIntentClassifier,
     RoleRelevanceMatcher,
     LocationRelevanceMatcher,
@@ -326,9 +327,9 @@ class LinkedInPostExtractor:
                 loc_match = re.search(r"(?:📍\s*location|location|city|in)\s*:\s*([A-Za-z\s]+)", full_text, re.IGNORECASE)
                 location = loc_match.group(1).strip() if loc_match else "Unspecified / Remote"
 
-                # Role
-                role_match = re.search(r"hiring\s+(?:for\s+)?([^\n!.,#]+)", full_text, re.IGNORECASE)
-                role = role_match.group(1).strip() if role_match else (title_str.split("|")[0].strip() if title_str else "Software Engineer")
+                # Roles
+                extracted_roles = JobRoleExtractor.extract_roles(full_text, default_title=title_str.split("|")[0].strip() if title_str else "Software Engineer")
+                role = extracted_roles[0] if extracted_roles else "Software Engineer"
 
                 # =================================================
                 # 5. Relevance Scoring & Post Quality
@@ -336,7 +337,15 @@ class LinkedInPostExtractor:
                 resolved_target_role = target_role or role
                 resolved_target_loc = target_location or "India"
 
-                role_score = RoleRelevanceMatcher.calculate_score(resolved_target_role, role, full_text)
+                role_match_res = RoleRelevanceMatcher.calculate_score_with_reason(
+                    target_role=resolved_target_role,
+                    post_role=role,
+                    post_content=full_text,
+                    extracted_roles=extracted_roles
+                )
+                role_score = role_match_res["score"]
+                role_reason = role_match_res["reason"]
+
                 loc_match_res = LocationRelevanceMatcher.match(resolved_target_loc, location, full_text)
                 exp_match_res = ExperienceRelevanceMatcher.match(candidate_exp_years if isinstance(candidate_exp_years, int) else 2, full_text)
 
@@ -376,7 +385,7 @@ class LinkedInPostExtractor:
                 )
 
                 # =================================================
-                # 7. Guaranteed /posts/ & Phase 2 Enriched Output Contract
+                # 7. Guaranteed /posts/ & Phase 3 Enriched Output Contract
                 # =================================================
                 result = {
                     "status": "success",
@@ -389,10 +398,12 @@ class LinkedInPostExtractor:
                     "author_type": intent_res.get("author_type", "RECRUITER"),
                     "company": company,
                     "job_role": role,
+                    "extracted_roles": extracted_roles,
                     "location": location,
                     "location_match_type": loc_match_res.get("match_type", "EXACT"),
                     "location_match_score": loc_match_res.get("score", 100),
                     "role_match_score": role_score,
+                    "role_match_reason": role_reason,
                     "experience_match_score": exp_match_res.get("score", 75),
                     "experience_fit": exp_match_res.get("fit", "UNKNOWN"),
                     "hiring_intent": intent_res.get("intent", "HIRING"),
