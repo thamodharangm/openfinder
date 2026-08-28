@@ -332,7 +332,7 @@ async def mcp_message_handler(request: Request):
                     },
                     {
                         "name": "search_hiring_posts",
-                        "description": "Searches real-time live LinkedIn recruiter hiring posts with direct post links and contact details. CRITICAL DISPLAY RULE: Always present results strictly as a horizontal Markdown table with columns: # | Company | Role | Experience | Location | Posted Time | HR Contact / Email | Direct Link. Never output vertical lists.",
+                        "description": "Searches real-time live LinkedIn recruiter hiring posts with direct post links, candidate ATS match fit, and contact details. CRITICAL DISPLAY RULE: Always present results strictly as a horizontal Markdown table with columns: # | Company | Role | Experience | Location | Posted Time | ATS Fit | HR Contact / Email | Direct Link. Never output vertical lists.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
@@ -345,6 +345,24 @@ async def mcp_message_handler(request: Request):
                                     "description": "Location (e.g. 'Bangalore', 'Remote', 'India')",
                                     "default": "India"
                                 },
+                                "timeframe": {
+                                    "type": "string",
+                                    "description": "Freshness filter ('past-24h', 'past-week', 'past-month')",
+                                    "default": "past-24h"
+                                },
+                                "candidate_name": {
+                                    "type": "string",
+                                    "description": "Candidate full name"
+                                },
+                                "candidate_skills": {
+                                    "type": "string",
+                                    "description": "Comma-separated technical skills for candidate ATS fit scoring (e.g. 'React, Node.js, Express, MongoDB')"
+                                },
+                                "candidate_exp_years": {
+                                    "type": "integer",
+                                    "description": "Candidate years of experience (e.g. 1)",
+                                    "default": 1
+                                },
                                 "max_results": {
                                     "type": "integer",
                                     "description": "Max results to fetch",
@@ -356,7 +374,7 @@ async def mcp_message_handler(request: Request):
                     },
                     {
                         "name": "search_opportunities",
-                        "description": "Canonical search tool discovering verified LinkedIn recruiter hiring /posts/ with exact freshness validation (past-1h, past-4h, past-12h, past-24h, past-7d), directional hiring intent, and opportunity ranking against candidate profile.",
+                        "description": "Canonical search tool discovering verified LinkedIn recruiter hiring /posts/ with exact freshness validation (past-1h, past-4h, past-12h, past-24h, past-7d), directional hiring intent, and opportunity ranking against candidate profile or inline skills.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
@@ -365,7 +383,10 @@ async def mcp_message_handler(request: Request):
                                 "timeframe": { "type": "string", "description": "Freshness window ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d')", "default": "past-24h" },
                                 "max_results": { "type": "integer", "description": "Max opportunities (1-30)", "default": 10 },
                                 "remote_only": { "type": "boolean", "description": "Filter for remote positions only", "default": False },
-                                "candidate_profile_id": { "type": "string", "description": "Optional stored candidate profile ID for ATS skill & experience matching" }
+                                "candidate_profile_id": { "type": "string", "description": "Optional stored candidate profile ID for ATS skill & experience matching" },
+                                "candidate_skills": { "type": "string", "description": "Comma-separated technical skills (e.g. 'React, Node.js, Express, MongoDB')" },
+                                "candidate_exp_years": { "type": "integer", "description": "Candidate years of experience", "default": 1 },
+                                "candidate_name": { "type": "string", "description": "Candidate full name" }
                             },
                             "required": ["query"]
                         }
@@ -390,7 +411,9 @@ async def mcp_message_handler(request: Request):
                                 "job_title": { "type": "string", "description": "Target job title" },
                                 "company_name": { "type": "string", "description": "Target company name", "default": "Hiring Team" },
                                 "matched_skills": { "type": "string", "description": "Key candidate skills", "default": "React" },
-                                "candidate_name": { "type": "string", "description": "Candidate name", "default": "Candidate" }
+                                "candidate_name": { "type": "string", "description": "Candidate name", "default": "Candidate" },
+                                "candidate_exp_years": { "type": "integer", "description": "Candidate total years of experience", "default": 1 },
+                                "recipient_name": { "type": "string", "description": "Recruiter / Hiring Manager name", "default": "Hiring Team" }
                             },
                             "required": ["job_title"]
                         }
@@ -553,14 +576,18 @@ async def mcp_message_handler(request: Request):
         elif tool_name == "generate_recruiter_pitch":
             job_title = args.get("job_title", "Software Engineer")
             company_name = args.get("company_name", "Hiring Team")
-            matched_skills = [s.strip() for s in args.get("matched_skills", "React").split(",")]
+            matched_skills = [s.strip() for s in args.get("matched_skills", "React").split(",") if s.strip()]
             candidate_name = args.get("candidate_name", "Candidate")
+            candidate_exp_years = int(args.get("candidate_exp_years", 1))
+            recipient_name = args.get("recipient_name") or args.get("author")
 
             pitches = OutreachPitchGenerator.generate_suite(
                 job_title=job_title,
                 company_name=company_name,
                 matched_skills=matched_skills,
-                candidate_name=candidate_name
+                candidate_name=candidate_name,
+                candidate_exp_years=candidate_exp_years,
+                recipient_name=recipient_name
             )
 
             response_payload = {
