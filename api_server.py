@@ -9,6 +9,10 @@ import asyncio
 import uuid
 from pathlib import Path
 import sys
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("openfinder")
 
 # Ensure UTF-8 stdout/stderr on Windows terminals
 if sys.platform == "win32":
@@ -525,6 +529,7 @@ async def mcp_message_handler(request: Request):
             keywords = args.get("keywords", "React Developer")
             location = args.get("location", "India")
             timeframe = args.get("timeframe", "past-24h")
+            max_results = args.get("max_results", 10)
             logger.info(f"🔍 [MCP search_hiring_posts] query='{keywords}', location='{location}', timeframe='{timeframe}', max={max_results}")
             res = await service.search_opportunities_async(
                 query=keywords,
