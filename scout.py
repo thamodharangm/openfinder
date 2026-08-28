@@ -28,7 +28,7 @@ from core.post_extractor import LinkedInPostExtractor
 
 def main():
     parser = argparse.ArgumentParser(
-        description="🎯 OpenFinder CLI - Search Live LinkedIn Recruiter Posts & Match Your Resume",
+        description="🎯 OpenFinder CLI - Universal AI Job Catcher for Freshers & Experienced",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

@@ -1,8 +1,8 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "OpenFinder - Universal AI LinkedIn Scout & Recruiter Intelligence API",
-    "description": "High-precision LinkedIn hiring post finder, candidate resume profile extractor, and recruiter outreach suite for ChatGPT Custom GPTs. Discovers verified /posts/ URLs with exact minute-level freshness and ATS candidate fit scoring.",
+    "title": "OpenFinder - Universal AI Job Catcher for Freshers & Experienced API",
+    "description": "High-precision LinkedIn hiring post finder, candidate resume profile extractor, and recruiter outreach suite for ChatGPT Custom GPTs. Discovers verified /posts/ URLs with exact minute-level freshness and ATS candidate fit scoring for freshers and experienced candidates.",
     "version": "2.0.0"
   },
   "servers": [

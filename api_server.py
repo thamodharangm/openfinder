@@ -34,7 +34,7 @@ from core.post_extractor import LinkedInPostExtractor
 from core.service import OpenFinderService
 
 app = FastAPI(
-    title="OpenFinder - Universal AI Career Scout & Claude Connector",
+    title="OpenFinder - Universal AI Job Catcher for Freshers & Experienced",
     description="Full Dual Protocol API supporting ChatGPT OpenAPI Actions and Claude Web Connectors (MCP SSE & JSON-RPC).",
     version="2.0.0"
 )

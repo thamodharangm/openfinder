@@ -2,7 +2,7 @@
   <img src="openfinderlogo.svg" alt="OpenFinder Logo" width="440" />
 </p>
 
-<h1 align="center">🎯 OpenFinder v2.0 - Universal AI LinkedIn Scout & Recruiter Intelligence</h1>
+<h1 align="center">🎯 OpenFinder v2.0 - Universal AI Job Catcher for Freshers & Experienced</h1>
 
 <p align="center">
   <strong>High-Precision, Real-Time LinkedIn Hiring Post Finder, Candidate Resume Matcher & Recruiter Outreach Suite</strong><br>

@@ -28,7 +28,7 @@ from core.pitch_generator import OutreachPitchGenerator
 from core.post_extractor import LinkedInPostExtractor
 
 # Initialize FastMCP Server
-mcp = FastMCP("OpenFinder - Professional Career Scout")
+mcp = FastMCP("OpenFinder - Universal AI Job Catcher for Freshers & Experienced")
 
 # Initialize core services
 service = OpenFinderService()
