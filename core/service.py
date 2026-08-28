@@ -186,8 +186,8 @@ class OpenFinderService:
         Finds verified LinkedIn hiring /posts/ with exact freshness verification,
         directional hiring intent, role precision, ATS resume matching, and Opportunity Ranking.
         """
-        # Validate and bound inputs
-        bounded_max_results = max(1, min(int(max_results) if max_results else 10, 30))
+        # Validate and bound inputs (Default 20 results)
+        bounded_max_results = max(20, min(int(max_results) if max_results else 20, 50))
         clean_query = query.strip() if query else "Software Engineer"
         clean_location = location.strip() if location else "India"
 
@@ -217,23 +217,23 @@ class OpenFinderService:
             timeframe = "past-24h"
             max_age_min = 1440
 
-        # Smart Query Expansion: Generate 3-5 role synonyms for high-recall discovery
+        # Smart Query Expansion: Generate 5-8 role synonyms for high-volume discovery
         q_lower = clean_query.lower()
         expanded_keywords = [clean_query]
         if any(k in q_lower for k in ["react", "frontend", "mern"]):
-            for syn in ["React Developer", "MERN Stack", "Frontend Developer", "React Native"]:
+            for syn in ["React Developer", "MERN Stack", "Frontend Developer", "React Native", "Full Stack Developer"]:
                 if syn.lower() not in [k.lower() for k in expanded_keywords]:
                     expanded_keywords.append(syn)
         elif any(k in q_lower for k in ["node", "backend", "express"]):
-            for syn in ["Node.js Developer", "Backend Developer", "MERN Stack", "Full Stack"]:
+            for syn in ["Node.js Developer", "Backend Developer", "MERN Stack", "Full Stack Developer"]:
                 if syn.lower() not in [k.lower() for k in expanded_keywords]:
                     expanded_keywords.append(syn)
         elif any(k in q_lower for k in ["python", "fastapi", "django"]):
-            for syn in ["Python Developer", "Backend Engineer", "FastAPI"]:
+            for syn in ["Python Developer", "Backend Engineer", "FastAPI", "Python Django"]:
                 if syn.lower() not in [k.lower() for k in expanded_keywords]:
                     expanded_keywords.append(syn)
         elif any(k in q_lower for k in ["full stack", "fullstack", "software engineer"]):
-            for syn in ["Full Stack Developer", "MERN Developer", "Software Engineer"]:
+            for syn in ["Full Stack Developer", "MERN Developer", "Software Engineer", "Frontend Developer"]:
                 if syn.lower() not in [k.lower() for k in expanded_keywords]:
                     expanded_keywords.append(syn)
 
@@ -243,19 +243,36 @@ class OpenFinderService:
                 expanded_keywords.append("React Developer")
             if ("node.js" in t_skills or "express.js" in t_skills) and "Node.js Developer" not in expanded_keywords:
                 expanded_keywords.append("Node.js Developer")
+            if ("react native" in t_skills or "expo" in t_skills) and "React Native" not in expanded_keywords:
+                expanded_keywords.append("React Native")
 
-        # Execute concurrent multi-query discovery
+        # Execute concurrent multi-query discovery across target location and Remote
         search_tasks = [
             self.finder.search_hiring_posts_async(
                 keywords=kw,
                 location=clean_location,
                 timeframe=timeframe,
                 remote_only=remote_only,
-                max_results=bounded_max_results,
+                max_results=15,
                 debug=debug
             )
-            for kw in expanded_keywords[:4]
+            for kw in expanded_keywords[:6]
         ]
+        
+        # Also concurrently search Remote if user specified a city like Bangalore
+        if clean_location.lower() not in ["remote", "india"] and not remote_only:
+            for kw in expanded_keywords[:3]:
+                search_tasks.append(
+                    self.finder.search_hiring_posts_async(
+                        keywords=kw,
+                        location="Remote",
+                        timeframe=timeframe,
+                        remote_only=True,
+                        max_results=10,
+                        debug=debug
+                    )
+                )
+
         results_lists = await asyncio.gather(*search_tasks, return_exceptions=True)
 
         seen_urls = set()

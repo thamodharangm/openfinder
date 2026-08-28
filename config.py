@@ -10,7 +10,7 @@ CACHE_DB_PATH = DATA_DIR / "cache.db"
 # Search & Timeframe Defaults
 DEFAULT_TIMEFRAME = "past-24h"  # 'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d'
 DEFAULT_LOCATION = "India"
-DEFAULT_MAX_RESULTS = 23
+DEFAULT_MAX_RESULTS = 20
 
 # Performance & Network Configuration
 MAX_POST_EXTRACTION_CONCURRENCY = int(os.environ.get("OPENFINDER_CONCURRENCY", 5))
