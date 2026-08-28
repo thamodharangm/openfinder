@@ -26,9 +26,9 @@ from core.linkedin_session import LinkedInSessionSearch
 
 class LinkedInFinder:
     """
-    Finds real-time genuine LinkedIn recruiter & founder hiring posts (STRICTLY /posts/ URLs only).
-    Completely rejects any corporate job board listings (/jobs/view/) or feed links.
-    Enforces exact minute-level publication freshness, verified HIRING intent, and high role precision.
+    High-Recall, High-Precision LinkedIn hiring post discovery engine (STRICTLY /posts/ URLs only).
+    Enforces exact publication timestamps, verified HIRING intent, role family matching,
+    session health diagnostics, timeframe-aware caching, and discovery funnel metrics.
     """
 
     def __init__(self, skills_taxonomy: Optional[List[str]] = None):
@@ -42,9 +42,7 @@ class LinkedInFinder:
 
     @staticmethod
     def is_valid_recruiter_post_url(url: str) -> bool:
-        """
-        STRICT VALIDATION: Ensures URL is ONLY a genuine LinkedIn /posts/ URL.
-        """
+        """STRICT VALIDATION: Ensures URL is ONLY a genuine LinkedIn /posts/ URL."""
         return is_valid_linkedin_post_url(url)
 
     @staticmethod
@@ -90,7 +88,6 @@ class LinkedInFinder:
     def clean_linkedin_url(self, raw_url: str) -> Optional[str]:
         """
         Decodes redirect wrappers and normalizes into a clean LinkedIn /posts/ URL.
-        Returns None if not a valid /posts/ URL.
         """
         if not raw_url:
             return None
@@ -119,14 +116,15 @@ class LinkedInFinder:
 
         return normalize_linkedin_post_url(decoded_url)
 
-    def search_recruiter_posts_yahoo(self, query: str, max_results: int = DEFAULT_MAX_RESULTS) -> List[str]:
+    def search_recruiter_posts_yahoo(self, query: str, page: int = 1, max_results: int = DEFAULT_MAX_RESULTS) -> List[str]:
         """
-        Searches Yahoo for indexed LinkedIn /posts/ URLs.
+        Searches Yahoo for indexed LinkedIn /posts/ URLs with pagination offset.
         """
         post_urls = []
         try:
             url = "https://search.yahoo.com/search"
-            params = {"p": query, "n": max_results * 2}
+            start_b = (page - 1) * 10 + 1
+            params = {"p": query, "b": str(start_b), "pz": "10"}
             with httpx.Client(headers=self.headers, timeout=10.0, follow_redirects=True) as client:
                 resp = client.get(url, params=params)
                 if resp.status_code == 200:
@@ -147,11 +145,12 @@ class LinkedInFinder:
         location: str = DEFAULT_LOCATION, 
         timeframe: str = "past-24h",
         remote_only: bool = False,
-        max_results: int = DEFAULT_MAX_RESULTS
+        max_results: int = DEFAULT_MAX_RESULTS,
+        debug: bool = False
     ) -> List[Dict[str, Any]]:
         """
         Searches ONLY for genuine LinkedIn recruiter/founder /posts/ URLs.
-        Enforces exact minute-level freshness, verified HIRING intent, and high role precision.
+        Enforces exact publication timestamps, verified HIRING intent, and high role precision.
         """
         # 1. Parse Search Intent
         intent = SearchIntentParser.parse(
@@ -163,7 +162,7 @@ class LinkedInFinder:
 
         max_age_minutes = intent.max_age_minutes
         cache_key = f"hiring_posts::{intent.target_role}::{intent.target_location}::{timeframe}::{remote_only}::{max_results}"
-        cached = self.cache.get(cache_key)
+        cached = self.cache.get(cache_key, timeframe=timeframe)
         if cached is not None and len(cached) > 0:
             return cached
 
@@ -174,24 +173,26 @@ class LinkedInFinder:
             max_results=max_results,
             skills_taxonomy=self.skills_taxonomy,
             target_role=intent.target_role,
-            target_location=intent.target_location
+            target_location=intent.target_location,
+            debug=debug
         )
         if session_posts:
             session_posts.sort(key=lambda x: x.get("post_quality_score", 0), reverse=True)
-            self.cache.set(cache_key, session_posts)
+            self.cache.set(cache_key, session_posts, timeframe=timeframe)
             return session_posts
 
-        # 3. Fallback: Search Engine Mirror Dorking (Targeting site:linkedin.com/posts only)
+        # 3. Fallback: Search Engine Mirror Dorking
         queries = intent.generate_dork_queries(max_queries=5)
         found_urls: List[str] = []
 
         for q in queries:
-            urls = self.search_recruiter_posts_yahoo(q, max_results=max_results)
-            for u in urls:
-                if u not in found_urls and is_valid_linkedin_post_url(u):
-                    found_urls.append(u)
-            if len(found_urls) >= max_results * 2:
-                break
+            for p_num in range(1, 3):
+                urls = self.search_recruiter_posts_yahoo(q, page=p_num, max_results=max_results)
+                for u in urls:
+                    if u not in found_urls and is_valid_linkedin_post_url(u):
+                        found_urls.append(u)
+                if len(found_urls) >= max_results * 4:
+                    break
 
         parsed_posts = []
         for post_url in found_urls:
@@ -218,17 +219,18 @@ class LinkedInFinder:
             if post_data.get("hiring_intent") != "HIRING":
                 continue
 
-            # Role Precision Gate
             role_score = post_data.get("role_match_score", 0)
             if intent.role_family != "GENERAL_SOFTWARE" and role_score < 50:
                 continue
 
             parsed_posts.append({
                 "title": post_data.get("job_role", intent.target_role),
+                "role": post_data.get("job_role", intent.target_role),
                 "extracted_roles": post_data.get("extracted_roles", []),
                 "company": post_data.get("company", "Hiring Team"),
                 "author": post_data.get("author", "Hiring Recruiter"),
                 "author_type": post_data.get("author_type", "RECRUITER"),
+                "location": post_data.get("location", "Unspecified / Remote"),
                 "work_mode": "Remote / WFH" if "remote" in post_data.get("full_post_content", "").lower() else "On-Site / Unspecified",
                 "salary_range": "Competitive / Disclosed in post",
                 "experience_required": post_data.get("experience_fit", "1–2 Yrs"),
@@ -245,18 +247,20 @@ class LinkedInFinder:
                 "post_quality_score": post_data.get("post_quality_score", 85),
                 "is_spam": False,
                 "required_skills": post_data.get("detected_skills", []),
+                "recruiter_emails": post_data.get("recruiter_emails", []),
                 "contact_emails": post_data.get("recruiter_emails", []),
                 "contact_phones": post_data.get("contact_numbers", []),
+                "contact_numbers": post_data.get("contact_numbers", []),
                 "application_links": [post_url],
                 "post_url": post_url,
+                "discovery_source": "search_engine",
                 "raw_snippet": post_data.get("full_post_content", "")[:350]
             })
 
-        # Sort by post_quality_score
         parsed_posts.sort(key=lambda x: x.get("post_quality_score", 0), reverse=True)
 
         if parsed_posts:
-            self.cache.set(cache_key, parsed_posts)
+            self.cache.set(cache_key, parsed_posts, timeframe=timeframe)
 
         return parsed_posts
 
@@ -265,11 +269,11 @@ class LinkedInFinder:
         keywords: str,
         date_posted: str = "past-24h",
         max_results: int = 10,
-        location: Optional[str] = None
+        location: Optional[str] = None,
+        debug: bool = False
     ) -> List[Dict[str, Any]]:
         """
-        Search LinkedIn posts globally by keyword with an exact freshness window and high role precision.
-        Supported windows: 'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d'.
+        Search LinkedIn posts globally with exact freshness window and high role precision.
         """
         intent = SearchIntentParser.parse(
             keywords=keywords,
@@ -279,65 +283,29 @@ class LinkedInFinder:
 
         max_age_minutes = intent.max_age_minutes
         cache_key = f"search_posts::{intent.target_role}::{date_posted}::{intent.target_location}::{max_results}"
-        cached = self.cache.get(cache_key)
+        cached = self.cache.get(cache_key, timeframe=date_posted)
         if cached is not None and len(cached) > 0:
             return cached
 
-        # 1. First priority: Authenticated LinkedIn Session Search (Posts Tab)
         session_results = LinkedInSessionSearch.search_posts_internal(
             keywords=intent.target_role,
             date_posted=date_posted,
             max_results=max_results,
             skills_taxonomy=self.skills_taxonomy,
             target_role=intent.target_role,
-            target_location=intent.target_location
+            target_location=intent.target_location,
+            debug=debug
         )
         if session_results:
             session_results.sort(key=lambda x: x.get("post_quality_score", 0), reverse=True)
-            self.cache.set(cache_key, session_results)
+            self.cache.set(cache_key, session_results, timeframe=date_posted)
             return session_results
 
-        # 2. Fallback: Search Engine Mirror Dorking
-        queries = intent.generate_dork_queries(max_queries=4)
-        found_urls = []
-        for q in queries:
-            urls = self.search_recruiter_posts_yahoo(q, max_results=max_results)
-            for u in urls:
-                if u not in found_urls and is_valid_linkedin_post_url(u):
-                    found_urls.append(u)
-            if len(found_urls) >= max_results * 2:
-                break
-
-        parsed_results = []
-        for p_url in found_urls:
-            if len(parsed_results) >= max_results:
-                break
-
-            # Discovery Pre-Filter: Snowflake timestamp check
-            snow_dt = extract_snowflake_timestamp(p_url)
-            if snow_dt is not None:
-                if not is_within_window(snow_dt, max_age_minutes):
-                    continue
-
-            # Verification: Full post extraction & hiring intent verification
-            post_info = LinkedInPostExtractor.extract_from_url(
-                url=p_url,
-                skills_taxonomy=self.skills_taxonomy,
-                max_age_minutes=max_age_minutes,
-                target_role=intent.target_role,
-                target_location=intent.target_location
-            )
-            if post_info and post_info.get("status") == "success" and post_info.get("hiring_intent") == "HIRING":
-                # Role Precision Gate
-                role_score = post_info.get("role_match_score", 0)
-                if intent.role_family != "GENERAL_SOFTWARE" and role_score < 50:
-                    continue
-                parsed_results.append(post_info)
-
-        # Sort by post_quality_score
-        parsed_results.sort(key=lambda x: x.get("post_quality_score", 0), reverse=True)
-
-        if parsed_results:
-            self.cache.set(cache_key, parsed_results)
-
-        return parsed_results
+        # Fallback to search engine
+        return self.search_hiring_posts(
+            keywords=keywords,
+            location=location or "India",
+            timeframe=date_posted,
+            max_results=max_results,
+            debug=debug
+        )

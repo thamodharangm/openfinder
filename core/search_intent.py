@@ -30,8 +30,6 @@ class SearchIntent:
         Strictly prioritizes exact quoted role phrases.
         """
         loc_str = f" {self.target_location}" if self.target_location and self.target_location.lower() != "india" else ""
-        
-        # Primary role term
         p_role = self.target_role.replace('"', '').strip()
         
         queries = [
@@ -42,16 +40,64 @@ class SearchIntent:
             f'site:linkedin.com/posts "{p_role}" "urgent hiring"{loc_str}'.strip(),
         ]
         
-        # Add primary variant if available
         if self.role_variants and len(self.role_variants) > 1:
             v_role = self.role_variants[1].replace('"', '').strip()
             queries.insert(1, f'site:linkedin.com/posts "{v_role}" "we are hiring"{loc_str}'.strip())
 
-        return queries[:max_queries]
+        seen = set()
+        deduped = []
+        for q in queries:
+            if q not in seen:
+                seen.add(q)
+                deduped.append(q)
+
+        return deduped[:max_queries]
+
+    def generate_diverse_session_queries(self, max_queries: int = 4) -> List[str]:
+        """
+        Generates a balanced set of distinct high-intent queries for LinkedIn content search.
+        Covers:
+          1. Exact Role Quoted: '"React Developer" hiring'
+          2. Action Statement: 'React Developer "we are hiring"'
+          3. Resume Call: 'React Developer "send resume"'
+          4. Role Variant: 'React.js Developer hiring' or 'Frontend Developer React hiring'
+        """
+        p_role = self.target_role.replace('"', '').strip()
+        loc_term = self.location_variants[0] if self.location_variants and self.location_variants[0].lower() != "india" else ""
+        loc_suffix = f" {loc_term}" if loc_term else ""
+
+        queries = [
+            f'"{p_role}" hiring{loc_suffix}'.strip(),
+            f'{p_role} "we are hiring"{loc_suffix}'.strip(),
+            f'{p_role} "send resume"{loc_suffix}'.strip(),
+        ]
+
+        if self.role_variants and len(self.role_variants) > 1:
+            v_role = self.role_variants[1].replace('"', '').strip()
+            queries.append(f'{v_role} hiring{loc_suffix}'.strip())
+
+        if len(self.location_variants) > 1 and self.location_variants[1].lower() != "india":
+            alt_loc = self.location_variants[1]
+            queries.append(f'{p_role} {alt_loc}'.strip())
+        elif len(self.role_variants) > 2:
+            v2_role = self.role_variants[2].replace('"', '').strip()
+            queries.append(f'{v2_role} hiring{loc_suffix}'.strip())
+        else:
+            queries.append(f'{p_role} "urgent opening"{loc_suffix}'.strip())
+
+        # Deduplicate while preserving order
+        seen = set()
+        deduped = []
+        for q in queries:
+            if q not in seen:
+                seen.add(q)
+                deduped.append(q)
+
+        return deduped[:max_queries]
 
     def generate_session_keywords(self) -> str:
         """
-        Generates high-intent query string for internal LinkedIn Posts Search.
+        Primary query string for single-query compatibility.
         """
         loc_str = f" {self.target_location}" if self.target_location and self.target_location.lower() != "india" else ""
         return f"{self.target_role} hiring{loc_str}".strip()
@@ -66,37 +112,37 @@ class SearchIntentParser:
         "FRONTEND_REACT": {
             "triggers": ["react", "react.js", "reactjs", "react native", "next.js", "nextjs"],
             "required": ["react", "react.js", "reactjs", "next.js"],
-            "negatives": ["coldfusion", "php", "laravel", "django", "java", "spring", "dotnet", "c#", "ruby", "rails", "sap", "oracle", "salesforce"],
+            "negatives": ["coldfusion", "php", "laravel", "django", "java", "spring", "dotnet", "c#", "ruby", "rails", "sap", "oracle", "salesforce", "devops", "qa"],
             "variants": ["React Developer", "React.js Developer", "ReactJS Developer", "Frontend Developer (React)", "Frontend Engineer React", "MERN Developer", "Full Stack React Developer"]
         },
         "MERN_FULLSTACK": {
             "triggers": ["mern", "full stack react", "fullstack react"],
             "required": ["mern", "react", "node", "express", "mongodb"],
-            "negatives": ["coldfusion", "php", "django", "java", "dotnet", "c#", "sap"],
+            "negatives": ["coldfusion", "php", "django", "java", "dotnet", "c#", "sap", "devops"],
             "variants": ["MERN Stack Developer", "MERN Developer", "Full Stack Developer (MERN)", "React Node Developer"]
         },
         "NODE_BACKEND": {
             "triggers": ["node", "node.js", "nodejs", "express.js", "expressjs"],
             "required": ["node", "node.js", "nodejs", "express"],
-            "negatives": ["php", "django", "java", "dotnet", "c#", "coldfusion"],
+            "negatives": ["php", "django", "java", "dotnet", "c#", "coldfusion", "devops"],
             "variants": ["Node.js Developer", "NodeJS Developer", "Backend Developer (Node.js)", "Node.js Engineer"]
         },
         "PYTHON_BACKEND": {
             "triggers": ["python", "django", "fastapi", "flask"],
             "required": ["python", "django", "fastapi", "flask"],
-            "negatives": ["php", "coldfusion", "java", "dotnet", "c#", "ruby"],
+            "negatives": ["php", "coldfusion", "java", "dotnet", "c#", "ruby", "devops"],
             "variants": ["Python Developer", "Python Backend Developer", "Django Developer", "FastAPI Developer"]
         },
         "JAVA_BACKEND": {
             "triggers": ["java", "spring", "springboot", "j2ee", "hibernate"],
             "required": ["java", "spring", "springboot"],
-            "negatives": ["php", "coldfusion", "python", "ruby", "dotnet"],
+            "negatives": ["php", "coldfusion", "python", "ruby", "dotnet", "devops"],
             "variants": ["Java Developer", "Java Spring Boot Developer", "Java Backend Developer", "Java Engineer"]
         },
         "DOTNET_BACKEND": {
             "triggers": [".net", "dotnet", "c#", "asp.net"],
             "required": [".net", "dotnet", "c#"],
-            "negatives": ["php", "coldfusion", "python", "ruby", "java"],
+            "negatives": ["php", "coldfusion", "python", "ruby", "java", "devops"],
             "variants": [".NET Developer", "Dotnet Developer", "C# Developer", "ASP.NET Developer"]
         },
         "FRONTEND_GENERAL": {
@@ -152,9 +198,6 @@ class SearchIntentParser:
         candidate_exp_years: int = 2,
         remote_only: bool = False
     ) -> SearchIntent:
-        """
-        Parses raw search query and parameters into a canonical SearchIntent object.
-        """
         clean_kw = keywords.strip()
         kw_lower = clean_kw.lower()
 
@@ -173,7 +216,6 @@ class SearchIntentParser:
                 break
 
         if matched_family == "GENERAL_SOFTWARE":
-            # Extract main tokens as required tech
             tokens = [t for t in re.findall(r'[a-zA-Z0-9.+]+', kw_lower) if t not in ["developer", "engineer", "hiring", "lead", "senior", "junior"]]
             required_tech = tokens if tokens else [clean_kw]
             variants = [clean_kw, f"{clean_kw} Developer", f"{clean_kw} Engineer"]
@@ -186,7 +228,7 @@ class SearchIntentParser:
         for city_key, cluster in cls.LOCATION_CLUSTERS.items():
             if city_key in loc_lower or any(alias.lower() in loc_lower for alias in cluster):
                 loc_variants = cluster
-                loc_clean = cluster[0]  # Canonical name
+                loc_clean = cluster[0]
                 break
 
         # 3. Resolve Timeframe
@@ -194,7 +236,6 @@ class SearchIntentParser:
 
         # 4. Standardize Target Role Name
         target_role = clean_kw
-        # Strip common search terms from role name
         target_role = re.sub(r'\b(hiring|urgent|immediate|jobs?|openings?)\b', '', target_role, flags=re.IGNORECASE).strip()
         if not target_role:
             target_role = clean_kw
