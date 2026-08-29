@@ -555,3 +555,124 @@ class LinkedInFinder:
                 debug=debug
             )
         )
+
+    async def harvest_query_matrix_async(
+        self,
+        roles: List[str],
+        locations: List[str],
+        timeframe: str = "past-7d",
+        max_pages: int = 4,
+        target_count: int = 100,
+        concurrency_limit: int = 8,
+        debug: bool = False
+    ) -> List[Dict[str, Any]]:
+        """
+        Performs high-velocity, multi-angle search matrix harvesting across roles, locations,
+        and deep pagination pages to collect large raw datasets of hiring posts.
+        """
+        clean_roles = [r.strip() for r in roles if r and r.strip()]
+        if not clean_roles:
+            clean_roles = ["Software Engineer"]
+
+        clean_locs = [l.strip() for l in locations if l and l.strip()]
+        if not clean_locs:
+            clean_locs = ["India"]
+
+        search_tasks = []
+        semaphore = asyncio.Semaphore(concurrency_limit)
+        all_found_urls: List[str] = []
+        seen_urls = set()
+
+        timeout = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=10.0)
+        async with httpx.AsyncClient(headers=self.headers, timeout=timeout, follow_redirects=True) as client:
+            async def _fetch_page(query: str, page_num: int):
+                async with semaphore:
+                    offset = (page_num - 1) * 10 + 1
+                    try:
+                        urls = await self._search_yahoo_async(client, query, count=10, offset=offset)
+                        return urls
+                    except Exception as e:
+                        logger.debug("Harvest page fetch error for query '%s' page %d: %s", query, page_num, e)
+                        return []
+
+            fetch_coroutines = []
+            hiring_keywords = [
+                '"we are hiring"',
+                'hiring',
+                '"looking for"',
+                '"send resume"',
+                '"immediate hiring"'
+            ]
+
+            for role in clean_roles[:4]:
+                for loc in clean_locs[:4]:
+                    for hk in hiring_keywords[:2]:
+                        dork = f'site:linkedin.com/posts {hk} "{role}" {loc}'
+                        for p in range(1, max(1, min(max_pages, 5)) + 1):
+                            fetch_coroutines.append(_fetch_page(dork, p))
+
+            page_results = await asyncio.gather(*fetch_coroutines, return_exceptions=True)
+            for res in page_results:
+                if isinstance(res, list):
+                    for u in res:
+                        norm = normalize_linkedin_post_url(u)
+                        if norm and norm not in seen_urls:
+                            seen_urls.add(norm)
+                            all_found_urls.append(norm)
+
+        # Also leverage authenticated session if available
+        if LinkedInSessionSearch.check_session_health().get("valid", False):
+            for role in clean_roles[:2]:
+                try:
+                    s_posts = await LinkedInSessionSearch.search_posts_internal_async(
+                        keywords=role,
+                        date_posted=timeframe,
+                        max_results=target_count,
+                        skills_taxonomy=self.skills_taxonomy,
+                        target_role=role,
+                        target_location=clean_locs[0] if clean_locs else "India",
+                        debug=debug
+                    )
+                    for sp in s_posts:
+                        u = sp.get("post_url")
+                        if u:
+                            norm = normalize_linkedin_post_url(u)
+                            if norm and norm not in seen_urls:
+                                seen_urls.add(norm)
+                                all_found_urls.append(norm)
+                except Exception as e:
+                    logger.debug("Session harvest error: %s", e)
+
+        if not all_found_urls:
+            return []
+
+        # Concurrently extract post details with bounded batch extraction
+        harvested_posts = await LinkedInPostExtractor.extract_batch_async(
+            all_found_urls[:target_count * 2],
+            max_workers=min(concurrency_limit, 12)
+        )
+
+        return harvested_posts
+
+    def harvest_query_matrix(
+        self,
+        roles: List[str],
+        locations: List[str],
+        timeframe: str = "past-7d",
+        max_pages: int = 4,
+        target_count: int = 100,
+        concurrency_limit: int = 8,
+        debug: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Synchronous entrypoint for harvest_query_matrix_async."""
+        return _run_async_safely(
+            self.harvest_query_matrix_async(
+                roles=roles,
+                locations=locations,
+                timeframe=timeframe,
+                max_pages=max_pages,
+                target_count=target_count,
+                concurrency_limit=concurrency_limit,
+                debug=debug
+            )
+        )

@@ -39,6 +39,7 @@ from core.post_extractor import LinkedInPostExtractor
 from core.profile_store import CandidateProfileStore
 from core.ranking import OpportunityRanker
 from core.resume_parser import ResumeParser
+from core.spam_filter import HiringIntentScorer, calculate_hiring_intent_score, classify_post_type
 from core.time_utils import extract_snowflake_timestamp, get_max_age_minutes
 
 logger = logging.getLogger(__name__)
@@ -264,6 +265,36 @@ class OpenFinderService:
             "candidate_profile": profile
         }
 
+    def _resolve_candidate_profile(
+        self,
+        candidate_profile_id: Optional[str] = None,
+        candidate_profile: Optional[Dict[str, Any]] = None,
+        candidate_skills: Optional[Union[str, List[str]]] = None,
+        candidate_exp_years: Optional[int] = None,
+        candidate_name: Optional[str] = None,
+        default_role: str = "Software Engineer"
+    ) -> Optional[Dict[str, Any]]:
+        """Resolves candidate profile from explicit dict, stored ID, or inline skills."""
+        resolved = candidate_profile
+        if not resolved and candidate_profile_id:
+            resolved = self.profile_store.get_profile(candidate_profile_id)
+
+        if not resolved and candidate_skills:
+            if isinstance(candidate_skills, str):
+                parsed_skills = [s.strip() for s in candidate_skills.split(",") if s.strip()]
+            else:
+                parsed_skills = list(candidate_skills)
+            exp_val = candidate_exp_years or 2
+            resolved = {
+                "candidate_name": candidate_name or "Candidate",
+                "top_skills": parsed_skills,
+                "skills": parsed_skills,
+                "years_of_experience": exp_val,
+                "seniority_level": "Mid-Level" if exp_val >= 2 else "Junior / Entry-Level (0-2 Years)",
+                "primary_role": default_role
+            }
+        return resolved
+
     async def search_opportunities_async(
         self,
         query: str = "React Developer",
@@ -279,35 +310,22 @@ class OpenFinderService:
         debug: bool = False
     ) -> Dict[str, Any]:
         """
-        Canonical Search Operation.
-        Finds verified LinkedIn hiring /posts/ with exact freshness verification,
-        directional hiring intent, role precision, ATS resume matching, and Opportunity Ranking.
+        Asynchronously searches across LinkedIn for verified hiring opportunities,
+        ranks posts using multi-signal scoring against candidate profile, and enforces freshness.
         """
-        # Validate and bound inputs
-        bounded_max_results = max(20, min(int(max_results) if max_results else 20, 50))
         clean_query = query.strip() if query else "Software Engineer"
         clean_location = location.strip() if location else "India"
+        bounded_max_results = max(20, min(int(max_results) if max_results else 20, 50))
 
         # Resolve candidate profile
-        resolved_profile = candidate_profile
-        if not resolved_profile and candidate_profile_id:
-            resolved_profile = self.profile_store.get_profile(candidate_profile_id)
-
-        # Fallback to inline candidate skills if passed directly
-        if not resolved_profile and candidate_skills:
-            if isinstance(candidate_skills, str):
-                parsed_skills = [s.strip() for s in candidate_skills.split(",") if s.strip()]
-            else:
-                parsed_skills = list(candidate_skills)
-            exp_val = candidate_exp_years or 2
-            resolved_profile = {
-                "candidate_name": candidate_name or "Candidate",
-                "top_skills": parsed_skills,
-                "skills": parsed_skills,
-                "years_of_experience": exp_val,
-                "seniority_level": "Mid-Level" if exp_val >= 2 else "Junior / Entry-Level (0-2 Years)",
-                "primary_role": clean_query
-            }
+        resolved_profile = self._resolve_candidate_profile(
+            candidate_profile_id=candidate_profile_id,
+            candidate_profile=candidate_profile,
+            candidate_skills=candidate_skills,
+            candidate_exp_years=candidate_exp_years,
+            candidate_name=candidate_name,
+            default_role=clean_query
+        )
 
         try:
             max_age_min = get_max_age_minutes(timeframe)
@@ -582,4 +600,231 @@ class OpenFinderService:
             candidate_exp_years=candidate_exp_years,
             recipient_name=recipient_name,
             recipient_email=recipient_email
+        )
+
+    async def bulk_harvest_opportunities_async(
+        self,
+        roles: Optional[Union[List[str], str]] = None,
+        locations: Optional[Union[List[str], str]] = None,
+        timeframe: str = "past-7d",
+        target_count: int = 50,
+        min_intent_score: int = 60,
+        candidate_profile_id: Optional[str] = None,
+        candidate_profile: Optional[Dict[str, Any]] = None,
+        candidate_skills: Optional[Union[str, List[str]]] = None,
+        candidate_exp_years: Optional[int] = None,
+        candidate_name: Optional[str] = None,
+        max_pages: int = 4,
+        debug: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Executes wide-matrix parallel search and deep pagination harvesting,
+        applies numerical hiring intent scoring (score >= min_intent_score),
+        classifies post type (DIRECT, RECRUITER, REFERRAL, AGENCY), and ranks by ATS match.
+        """
+        # 1. Normalize input parameters
+        if isinstance(roles, str):
+            roles_list = [r.strip() for r in roles.split(",") if r.strip()]
+        elif isinstance(roles, list):
+            roles_list = [str(r).strip() for r in roles if str(r).strip()]
+        else:
+            roles_list = ["React Developer", "MERN Stack", "Frontend Engineer", "Node.js Developer"]
+
+        if isinstance(locations, str):
+            locs_list = [l.strip() for l in locations.split(",") if l.strip()]
+        elif isinstance(locations, list):
+            locs_list = [str(l).strip() for l in locations if str(l).strip()]
+        else:
+            locs_list = ["Bangalore", "Chennai", "Hyderabad", "Pune", "Remote"]
+
+        bounded_target = max(10, min(int(target_count), 200))
+        resolved_profile = self._resolve_candidate_profile(
+            candidate_profile_id=candidate_profile_id,
+            candidate_profile=candidate_profile,
+            candidate_skills=candidate_skills,
+            candidate_exp_years=candidate_exp_years,
+            candidate_name=candidate_name
+        )
+
+        # 2. Harvest raw post dataset
+        raw_harvested = await self.finder.harvest_query_matrix_async(
+            roles=roles_list,
+            locations=locs_list,
+            timeframe=timeframe,
+            max_pages=max_pages,
+            target_count=bounded_target,
+            debug=debug
+        )
+
+        total_harvested_raw = len(raw_harvested)
+
+        # 3. Composite deduplication & Intent scoring
+        now_utc = datetime.now(timezone.utc)
+        seen_keys: Set[str] = set()
+        verified_hiring_posts: List[Dict[str, Any]] = []
+        rejected_intent_count = 0
+        duplicates_count = 0
+
+        for p in raw_harvested:
+            u = p.get("post_url")
+            if not u:
+                continue
+
+            author = (p.get("author") or "").strip().lower()
+            company = (p.get("company") or "").strip().lower()
+            dedupe_key = f"{u}::{author}::{company}"
+
+            if dedupe_key in seen_keys:
+                duplicates_count += 1
+                continue
+            seen_keys.add(dedupe_key)
+
+            # Evaluate Hiring Intent Score
+            snippet_text = p.get("raw_text") or p.get("snippet") or p.get("title") or ""
+            author_title = p.get("author_title") or p.get("author_headline") or ""
+            author_name = p.get("author") or ""
+
+            intent_eval = HiringIntentScorer.evaluate(snippet_text, author_title, author_name)
+            p["hiring_intent_score"] = intent_eval.score
+            p["hiring_type"] = intent_eval.hiring_type
+            p["intent_signals"] = intent_eval.signals
+            p["is_hiring_intent"] = intent_eval.is_hiring_intent
+
+            if intent_eval.score < min_intent_score or intent_eval.hiring_type == "NON_HIRING":
+                rejected_intent_count += 1
+                continue
+
+            # Check Snowflake timestamp & age
+            snow_dt = extract_snowflake_timestamp(u)
+            if snow_dt is not None:
+                age_hours = (now_utc - snow_dt).total_seconds() / 3600.0
+                p["age_minutes"] = int(age_hours * 60)
+                p["posted_time"] = f"{int(age_hours)}h ago" if age_hours < 24 else f"{int(age_hours//24)}d ago"
+            else:
+                p["posted_time"] = p.get("posted_time") or "Recently"
+
+            p["is_live_post"] = True
+            p["source_type"] = "Live LinkedIn Post"
+            verified_hiring_posts.append(p)
+
+        # 4. Fallback blend if harvested count is low
+        if len(verified_hiring_posts) < 10:
+            for r in roles_list[:2]:
+                for loc in locs_list[:2]:
+                    curated = get_curated_posts(role=r, location=loc, max_count=10)
+                    for cp in curated:
+                        u = cp.get("url")
+                        if u and u not in seen_keys:
+                            seen_keys.add(u)
+                            snow_dt = extract_snowflake_timestamp(u)
+                            age_hours = (now_utc - snow_dt).total_seconds() / 3600.0 if snow_dt else 12.0
+                            verified_hiring_posts.append({
+                                "title": cp.get("role", r),
+                                "role": cp.get("role", r),
+                                "company": cp.get("company", "Verified Tech Partner"),
+                                "author": cp.get("author", "Hiring Lead"),
+                                "location": cp.get("primary_location", loc),
+                                "work_mode": cp.get("work_mode", "Hybrid"),
+                                "recruiter_emails": cp.get("recruiter_emails", []),
+                                "contact_numbers": [],
+                                "post_url": u,
+                                "age_minutes": int(age_hours * 60),
+                                "posted_time": f"{int(age_hours)}h ago" if age_hours < 24 else f"{int(age_hours//24)}d ago",
+                                "skills": cp.get("keywords", []),
+                                "hiring_intent_score": 85,
+                                "hiring_type": "RECRUITER_HIRING",
+                                "is_live_post": False,
+                                "source_type": "Curated Directory (Fallback)",
+                                "salary_range": "Competitive / Disclosed in post",
+                                "snippet": f"Hiring {cp.get('role')} at {cp.get('company')} ({cp.get('primary_location')})."
+                            })
+
+        # 5. Opportunity Ranking & ATS Match Scoring
+        ranked = OpportunityRanker.rank_opportunities(
+            posts=verified_hiring_posts,
+            candidate_profile=resolved_profile,
+            target_role=roles_list[0] if roles_list else "Software Engineer",
+            target_location=locs_list[0] if locs_list else "India",
+            max_age_minutes=get_max_age_minutes(timeframe),
+            apply_diversity=True
+        )
+
+        final_dataset = ranked[:bounded_target]
+
+        clean_results: List[Dict[str, Any]] = []
+        for p in final_dataset:
+            clean_item = {
+                "company": p.get("company", "Hiring Team"),
+                "role": p.get("role") or p.get("job_role") or p.get("title") or "Software Engineer",
+                "author": p.get("author", "Hiring Manager"),
+                "hiring_type": p.get("hiring_type", "RECRUITER_HIRING"),
+                "hiring_intent_score": p.get("hiring_intent_score", 85),
+                "location": p.get("location", "Unspecified / Remote"),
+                "work_mode": p.get("work_mode", "Hybrid"),
+                "posted_time": p.get("posted_time") or "Recently",
+                "age_minutes": p.get("age_minutes", 0),
+                "salary_range": p.get("salary_range", "Competitive / Disclosed in post"),
+                "candidate_match_score": p.get("candidate_match_score"),
+                "match_score": p.get("candidate_match_score") or p.get("final_rank_score") or 85,
+                "is_live_post": p.get("is_live_post", True),
+                "source_type": p.get("source_type", "Live LinkedIn Post"),
+                "recruiter_emails": p.get("recruiter_emails", []),
+                "skills": p.get("skills", []),
+                "matched_skills": p.get("matched_skills", []),
+                "missing_skills": p.get("missing_skills", []),
+                "tailored_outreach_pitches": p.get("tailored_outreach_pitches", {}),
+                "post_url": p.get("post_url")
+            }
+            clean_results.append(clean_item)
+
+        return {
+            "status": "success",
+            "roles": roles_list,
+            "locations": locs_list,
+            "timeframe": timeframe,
+            "target_count": bounded_target,
+            "min_intent_score": min_intent_score,
+            "count": len(clean_results),
+            "funnel_metrics": {
+                "total_harvested_raw": total_harvested_raw,
+                "duplicates_removed": duplicates_count,
+                "intent_filtered_out": rejected_intent_count,
+                "verified_opportunities_ready": len(clean_results)
+            },
+            "candidate_profile_id": candidate_profile_id,
+            "candidate_name": resolved_profile.get("candidate_name") if resolved_profile else None,
+            "results": clean_results
+        }
+
+    def bulk_harvest_opportunities(
+        self,
+        roles: Optional[Union[List[str], str]] = None,
+        locations: Optional[Union[List[str], str]] = None,
+        timeframe: str = "past-7d",
+        target_count: int = 50,
+        min_intent_score: int = 60,
+        candidate_profile_id: Optional[str] = None,
+        candidate_profile: Optional[Dict[str, Any]] = None,
+        candidate_skills: Optional[Union[str, List[str]]] = None,
+        candidate_exp_years: Optional[int] = None,
+        candidate_name: Optional[str] = None,
+        max_pages: int = 4,
+        debug: bool = False
+    ) -> Dict[str, Any]:
+        """Synchronous entrypoint for bulk_harvest_opportunities."""
+        return _run_async_safely(
+            self.bulk_harvest_opportunities_async(
+                roles=roles,
+                locations=locations,
+                timeframe=timeframe,
+                target_count=target_count,
+                min_intent_score=min_intent_score,
+                candidate_profile_id=candidate_profile_id,
+                candidate_profile=candidate_profile,
+                candidate_skills=candidate_skills,
+                candidate_exp_years=candidate_exp_years,
+                candidate_name=candidate_name,
+                max_pages=max_pages,
+                debug=debug
+            )
         )

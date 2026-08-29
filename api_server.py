@@ -511,6 +511,21 @@ async def mcp_message_handler(request: Request):
                                 "max_results": { "type": "integer", "description": "Max number of posts to fetch", "default": 20 }
                             }
                         }
+                    },
+                    {
+                        "name": "bulk_harvest_opportunities",
+                        "description": "Performs wide-matrix parallel search and deep pagination to harvest 50-200+ verified hiring posts with composite deduplication, numerical intent scoring (>=60), and ATS ranking.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "roles": { "type": "array", "items": { "type": "string" }, "description": "List of job roles/titles to search (e.g. ['React Developer', 'MERN Stack'])" },
+                                "locations": { "type": "array", "items": { "type": "string" }, "description": "List of locations to search (e.g. ['Bangalore', 'Chennai', 'Remote'])" },
+                                "timeframe": { "type": "string", "description": "Freshness window ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d')", "default": "past-7d" },
+                                "target_count": { "type": "integer", "description": "Target number of verified opportunities to return (default: 50, max: 200)", "default": 50 },
+                                "min_intent_score": { "type": "integer", "description": "Minimum numerical hiring intent score threshold 0-100 (default: 60)", "default": 60 },
+                                "candidate_profile_id": { "type": "string", "description": "Optional stored candidate profile ID for ATS scoring" }
+                            }
+                        }
                     }
                 ]
             }
@@ -660,6 +675,21 @@ async def mcp_message_handler(request: Request):
                     "result": {"content": [{"type": "text", "text": json.dumps({"status": "success", "count": len(posts), "markdown_table": table, "posts": posts}, indent=2)}]}
                 }
 
+            elif tool_name == "bulk_harvest_opportunities":
+                res = await service.bulk_harvest_opportunities_async(
+                    roles=args.get("roles"),
+                    locations=args.get("locations"),
+                    timeframe=args.get("timeframe", "past-7d"),
+                    target_count=int(args.get("target_count", 50)),
+                    min_intent_score=int(args.get("min_intent_score", 60)),
+                    candidate_profile_id=args.get("candidate_profile_id") or args.get("profile_id")
+                )
+                response_payload = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
+                }
+
             else:
                 # Standard MCP error response inside result
                 response_payload = {
@@ -781,6 +811,43 @@ async def search_opportunities_endpoint(
             "count": 0,
             "results": [],
             "message": f"Search encountered an exception: {str(e)}"
+        }
+
+
+@app.get("/api/bulk-harvest", tags=["Opportunities"])
+@app.post("/api/bulk-harvest", tags=["Opportunities"])
+async def bulk_harvest_endpoint(
+    roles: Optional[str] = Query("React Developer, MERN Stack, Frontend Engineer", description="Comma-separated roles"),
+    locations: Optional[str] = Query("Bangalore, Chennai, Remote", description="Comma-separated locations"),
+    timeframe: str = Query("past-7d", description="Freshness window ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d')"),
+    target_count: int = Query(50, description="Target number of opportunities (10-200)"),
+    min_intent_score: int = Query(60, description="Minimum hiring intent score threshold 0-100"),
+    candidate_profile_id: Optional[str] = Query(None, description="Optional stored candidate profile ID"),
+    debug: bool = Query(False, description="Include debug metrics")
+) -> Dict[str, Any]:
+    """Wide-matrix parallel search and deep pagination bulk harvesting endpoint."""
+    try:
+        r_list = [r.strip() for r in roles.split(",") if r.strip()] if roles else None
+        l_list = [l.strip() for l in locations.split(",") if l.strip()] if locations else None
+        return await service.bulk_harvest_opportunities_async(
+            roles=r_list,
+            locations=l_list,
+            timeframe=timeframe,
+            target_count=target_count,
+            min_intent_score=min_intent_score,
+            candidate_profile_id=candidate_profile_id,
+            debug=debug
+        )
+    except Exception as e:
+        logger.error(f"❌ [REST bulk-harvest Error]: {e}")
+        return {
+            "status": "error",
+            "roles": roles,
+            "locations": locations,
+            "timeframe": timeframe,
+            "count": 0,
+            "results": [],
+            "message": f"Bulk harvest encountered an exception: {str(e)}"
         }
 
 

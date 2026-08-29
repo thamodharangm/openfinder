@@ -234,6 +234,188 @@ class SpamClassifier:
         )
 
 
+@dataclass
+class HiringIntentResult:
+    score: int  # 0 to 100
+    is_hiring_intent: bool  # score >= 60
+    hiring_type: str  # DIRECT_HIRING, RECRUITER_HIRING, REFERRAL_HIRING, AGENCY_HIRING, JOB_LINK_POST, NON_HIRING
+    signals: List[str] = field(default_factory=list)
+    penalties: List[str] = field(default_factory=list)
+    has_contact_email: bool = False
+    has_role_stack: bool = False
+    has_apply_link: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "score": self.score,
+            "is_hiring_intent": self.is_hiring_intent,
+            "hiring_type": self.hiring_type,
+            "signals": self.signals,
+            "penalties": self.penalties,
+            "has_contact_email": self.has_contact_email,
+            "has_role_stack": self.has_role_stack,
+            "has_apply_link": self.has_apply_link,
+        }
+
+
+class HiringIntentScorer:
+    """
+    Two-Stage Deterministic Numerical Hiring Intent & Classification Engine.
+    """
+
+    _HIRING_VERBS = [
+        re.compile(r'\b(?:we\s+are\s+hiring|urgently\s+hiring|hiring\s+for|open\s+position|join\s+our\s+team|developer\s+required|walk-?in\s+drive|immediate\s+hiring|we\'re\s+looking\s+for)\b', re.IGNORECASE),
+        re.compile(r'\b(?:looking\s+for\s+(?:a\s+)?(?:react|python|mern|node|full\s*stack|software|frontend|backend|java|developer|engineer))\b', re.IGNORECASE),
+        re.compile(r'\b(?:hiring\s+alert|careers\s+opportunity|talent\s+search|job\s+opportunity)\b', re.IGNORECASE),
+    ]
+
+    _DIRECT_HIRING_AUTHORS = [
+        re.compile(r'\b(?:founder|co-founder|ceo|cto|vp\s+of\s+engineering|director\s+of\s+engineering|engineering\s+manager|tech\s+lead|head\s+of\s+engineering)\b', re.IGNORECASE),
+    ]
+
+    _RECRUITER_AUTHORS = [
+        re.compile(r'\b(?:recruiter|talent\s+acquisition|hr\s+manager|talent\s+partner|human\s+resources|people\s+partner|talent\s+lead|hiring\s+manager)\b', re.IGNORECASE),
+    ]
+
+    _AGENCY_AUTHORS = [
+        re.compile(r'\b(?:staffing|consultancy|placement|talent\s+solutions|recruitment\s+agency|manpower|consulting)\b', re.IGNORECASE),
+    ]
+
+    _REFERRAL_SIGNALS = [
+        re.compile(r'\b(?:happy\s+to\s+refer|dm\s+for\s+referral|internal\s+referral|my\s+team\s+is\s+hiring|my\s+company\s+is\s+hiring)\b', re.IGNORECASE),
+    ]
+
+    _EMAIL_PATTERN = re.compile(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+')
+    _APPLY_LINK_PATTERN = re.compile(r'(?:https?://|www\.)(?:[a-zA-Z0-9-]+\.)*(?:bit\.ly|forms\.gle|t\.co|tinyurl|linkedin\.com/jobs|lever\.co|greenhouse\.io|workable\.com|notion\.site|ashbyhq\.com|[a-zA-Z0-9-]+\.com/(?:careers|jobs))', re.IGNORECASE)
+    _ROLE_STACK_PATTERN = re.compile(r'\b(?:react|next\.?js|node\.?js|python|django|fastapi|mern|typescript|javascript|frontend|backend|full\s*stack|software\s*engineer|developer|founding\s*engineer)\b', re.IGNORECASE)
+    _CRITERIA_PATTERN = re.compile(r'\b(?:\d+\s*(?:-|to|\+)\s*\d*\s*years?|ctc|lpa|notice\s+period|hybrid|remote|on-?site|bangalore|chennai|hyderabad|pune)\b', re.IGNORECASE)
+
+    @classmethod
+    def evaluate(cls, text: str, author_title: str = "", author_name: str = "") -> HiringIntentResult:
+        if not text or len(text.strip()) < 20:
+            return HiringIntentResult(
+                score=0,
+                is_hiring_intent=False,
+                hiring_type="NON_HIRING",
+                penalties=["Post text too short (<20 chars)"]
+            )
+
+        text_clean = text.strip()
+        text_lower = text_clean.lower()
+        title_lower = (author_title or "").lower()
+
+        # Step 1: Run spam classifier
+        spam_res = SpamClassifier.evaluate(text_clean, author=author_name)
+        if spam_res.is_spam:
+            return HiringIntentResult(
+                score=max(0, 100 - spam_res.spam_score),
+                is_hiring_intent=False,
+                hiring_type="NON_HIRING",
+                penalties=spam_res.matched_triggers or [spam_res.reason]
+            )
+
+        # Step 2: Calculate Positive Signals
+        score = 0
+        signals = []
+        penalties = []
+
+        # Signal 1: Hiring Verbs (+30)
+        hiring_match = any(pat.search(text_lower) for pat in cls._HIRING_VERBS)
+        if hiring_match:
+            score += 30
+            signals.append("Explicit hiring intent verbs (+30)")
+
+        # Signal 2: Contact Email (+25)
+        has_email = bool(cls._EMAIL_PATTERN.search(text_clean))
+        if has_email:
+            score += 25
+            signals.append("Direct recruiter email present (+25)")
+
+        # Signal 3: Specific Tech Stack / Role (+20)
+        has_role_stack = bool(cls._ROLE_STACK_PATTERN.search(text_lower))
+        if has_role_stack:
+            score += 20
+            signals.append("Specific role & tech stack mention (+20)")
+
+        # Signal 4: Job Criteria / Compensation / Location (+15)
+        has_criteria = bool(cls._CRITERIA_PATTERN.search(text_lower))
+        if has_criteria:
+            score += 15
+            signals.append("Experience/CTC/Location criteria specified (+15)")
+
+        # Signal 5: Direct Apply Link / Careers Page (+15)
+        has_apply_link = bool(cls._APPLY_LINK_PATTERN.search(text_lower))
+        if has_apply_link:
+            score += 15
+            signals.append("Direct application link or ATS form (+15)")
+
+        # Signal 6: Author Credibility Bonus (+15)
+        is_credible_author = any(pat.search(title_lower) for pat in (cls._DIRECT_HIRING_AUTHORS + cls._RECRUITER_AUTHORS))
+        if is_credible_author:
+            score += 15
+            signals.append("Author is verified hiring decision maker (+15)")
+
+        # Check job seeker penalty (-45)
+        for pat in SpamClassifier._JOB_SEEKER_PATTERNS:
+            if pat.search(text_lower):
+                score -= 45
+                penalties.append("Candidate reverse job seeking penalty (-45)")
+                break
+
+        # Check viral advice penalty (-35)
+        for pat in SpamClassifier._FLUFF_PATTERNS:
+            if pat.search(text_lower) and not hiring_match:
+                score -= 35
+                penalties.append("Viral discussion/advice penalty (-35)")
+                break
+
+        final_score = max(0, min(100, score))
+        is_hiring = final_score >= 60
+
+        # Step 3: Classify Post Type
+        if not is_hiring:
+            hiring_type = "NON_HIRING"
+        elif any(pat.search(text_lower) for pat in cls._REFERRAL_SIGNALS):
+            hiring_type = "REFERRAL_HIRING"
+        elif any(pat.search(title_lower) for pat in cls._DIRECT_HIRING_AUTHORS):
+            hiring_type = "DIRECT_HIRING"
+        elif any(pat.search(title_lower) for pat in cls._AGENCY_AUTHORS):
+            hiring_type = "AGENCY_HIRING"
+        elif any(pat.search(title_lower) for pat in cls._RECRUITER_AUTHORS) or has_email:
+            hiring_type = "RECRUITER_HIRING"
+        elif has_apply_link and len(text_clean) < 150:
+            hiring_type = "JOB_LINK_POST"
+        else:
+            hiring_type = "RECRUITER_HIRING"
+
+        return HiringIntentResult(
+            score=final_score,
+            is_hiring_intent=is_hiring,
+            hiring_type=hiring_type,
+            signals=signals,
+            penalties=penalties,
+            has_contact_email=has_email,
+            has_role_stack=has_role_stack,
+            has_apply_link=has_apply_link
+        )
+
+
+def calculate_hiring_intent_score(text: str, author_title: str = "", author_name: str = "") -> Tuple[int, str, Dict[str, Any]]:
+    """
+    Calculates numerical hiring intent score (0-100) and post classification.
+    Returns:
+        (score: int, hiring_type: str, details: dict)
+    """
+    res = HiringIntentScorer.evaluate(text, author_title, author_name)
+    return res.score, res.hiring_type, res.to_dict()
+
+
+def classify_post_type(text: str, author_title: str = "", author_name: str = "") -> str:
+    """Classifies post into DIRECT_HIRING, RECRUITER_HIRING, REFERRAL_HIRING, AGENCY_HIRING, JOB_LINK_POST, or NON_HIRING."""
+    res = HiringIntentScorer.evaluate(text, author_title, author_name)
+    return res.hiring_type
+
+
 def is_spam_or_bait(text: str) -> Tuple[bool, str]:
     """
     Checks if a LinkedIn post is spam, engagement bait, or non-job content.

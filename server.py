@@ -339,6 +339,44 @@ TOOLS = [
             },
             "required": ["keywords"]
         }
+    },
+    {
+        "name": "bulk_harvest_opportunities",
+        "description": "Performs wide-matrix parallel search and deep pagination to harvest 50-200+ verified hiring posts with composite deduplication, numerical intent scoring (>=60), and ATS ranking.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "roles": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "List of job roles/titles to search (e.g. ['React Developer', 'MERN Stack'])"
+                },
+                "locations": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "List of locations to search (e.g. ['Bangalore', 'Chennai', 'Remote'])"
+                },
+                "timeframe": {
+                    "type": "string",
+                    "description": "Freshness window ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d')",
+                    "default": "past-7d"
+                },
+                "target_count": {
+                    "type": "integer",
+                    "description": "Target number of verified opportunities to return (default: 50, max: 200)",
+                    "default": 50
+                },
+                "min_intent_score": {
+                    "type": "integer",
+                    "description": "Minimum numerical hiring intent score threshold 0-100 (default: 60)",
+                    "default": 60
+                },
+                "candidate_profile_id": {
+                    "type": "string",
+                    "description": "Optional stored candidate profile ID for ATS scoring"
+                }
+            }
+        }
     }
 ]
 
@@ -452,6 +490,17 @@ async def handle_tool(name: str, args: Dict[str, Any]) -> str:
         )
         table = LinkedInFinder.format_as_markdown_table(posts)
         return json.dumps({"status": "success", "count": len(posts), "markdown_table": table, "posts": posts}, ensure_ascii=False, indent=2)
+
+    elif name == "bulk_harvest_opportunities":
+        res = await service.bulk_harvest_opportunities_async(
+            roles=args.get("roles"),
+            locations=args.get("locations"),
+            timeframe=args.get("timeframe", "past-7d"),
+            target_count=int(args.get("target_count", 50)),
+            min_intent_score=int(args.get("min_intent_score", 60)),
+            candidate_profile_id=args.get("candidate_profile_id")
+        )
+        return json.dumps(res, ensure_ascii=False, indent=2)
 
     else:
         raise ValueError(f"Unknown tool: {name}")
