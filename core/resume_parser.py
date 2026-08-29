@@ -50,13 +50,14 @@ class ResumeParser:
         return full_text
 
     def extract_categorized_skills(self, text: str) -> Dict[str, List[str]]:
-        """Categorizes all matched technical skills into domains."""
+        """Categorizes all matched technical skills into domains and parses explicit skill lines."""
         if not text:
             return {}
 
         text_lower = text.lower()
         categorized = {}
 
+        # 1. Standard taxonomy pattern matching
         for category, skills in self.taxonomy.items():
             matched = set()
             for skill in skills:
@@ -66,6 +67,28 @@ class ResumeParser:
             if matched:
                 categorized[category] = sorted(list(matched))
 
+        # 2. Deep Explicit Skill Header Extraction (e.g. Frontend Skills:, Databases:, Tools:)
+        section_patterns = [
+            (r'(?:frontend|ui|client[\s-]side)[\s\w]*:\s*([^\n\r]+)', "Frontend"),
+            (r'(?:backend|server[\s-]side|apis?)[\s\w]*:\s*([^\n\r]+)', "Backend & APIs"),
+            (r'(?:database|storage|databases)[\s\w]*:\s*([^\n\r]+)', "Databases & Storage"),
+            (r'(?:tools|devops|cloud|platforms)[\s\w]*:\s*([^\n\r]+)', "Cloud, DevOps & Infrastructure"),
+            (r'(?:languages|programming)[\s\w]*:\s*([^\n\r]+)', "Languages"),
+            (r'(?:technical skills|skills|tech stack)[\s\w]*:\s*([^\n\r]+)', "Technical Skills"),
+        ]
+
+        for sec_pattern, target_cat in section_patterns:
+            matches = re.findall(sec_pattern, text, re.IGNORECASE)
+            for m in matches:
+                # Split by commas, slashes, bullets, or pipes
+                tokens = re.split(r'[,|•/·;]+', m)
+                for t in tokens:
+                    clean_t = t.strip().strip("-").strip()
+                    if clean_t and len(clean_t) <= 30 and not clean_t.lower().startswith("experience"):
+                        cat_list = categorized.setdefault(target_cat, [])
+                        if clean_t.title() not in cat_list:
+                            cat_list.append(clean_t.title())
+
         return categorized
 
     def extract_candidate_name_and_contact(self, text: str) -> Dict[str, Optional[str]]:
@@ -74,7 +97,7 @@ class ResumeParser:
             return {"name": "Candidate", "email": None, "phone": None, "github": None, "linkedin": None}
 
         email_pattern = r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
-        phone_pattern = r'(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}'
+        phone_pattern = r'(?:\+?\d{1,3}[-.\s]?)?\d{5}[-.\s]?\d{5}|(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}|\+91[\s-]?\d{10}'
         github_pattern = r'github\.com/([a-zA-Z0-9_-]+)'
         linkedin_pattern = r'linkedin\.com/in/([a-zA-Z0-9_-]+)'
 
@@ -89,7 +112,7 @@ class ResumeParser:
         return {
             "name": candidate_name,
             "email": emails[0] if emails else None,
-            "phone": phones[0] if phones else None,
+            "phone": phones[0].strip() if phones else None,
             "github": f"https://github.com/{github.group(1)}" if github else None,
             "linkedin": f"https://linkedin.com/in/{linkedin.group(1)}" if linkedin else None
         }
