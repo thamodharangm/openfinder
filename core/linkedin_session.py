@@ -49,7 +49,7 @@ class LinkedInSessionSearch:
         "Upgrade-Insecure-Requests": "1"
     }
 
-    TIMEOUT_CONFIG = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=10.0)
+    TIMEOUT_CONFIG = httpx.Timeout(connect=3.0, read=4.0, write=3.0, pool=4.0)
     MAX_CONCURRENCY = 5
 
     _SEEN_POST_IDS: Set[str] = set()

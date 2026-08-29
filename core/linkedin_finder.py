@@ -211,16 +211,24 @@ class LinkedInFinder:
                                 item["posted_time"] = age_res.get("age_text", item.get("posted_time", "Recently"))
                 return cached[:max_results]
 
-        # 1. Primary: Authenticated LinkedIn Session Search (Posts Tab)
-        session_posts = await LinkedInSessionSearch.search_posts_internal_async(
-            keywords=intent.target_role,
-            date_posted=timeframe,
-            max_results=max_results,
-            skills_taxonomy=self.skills_taxonomy,
-            target_role=intent.target_role,
-            target_location=intent.target_location,
-            debug=debug
-        )
+        # 1. Primary: Authenticated LinkedIn Session Search (Posts Tab) with safe 6s timeout
+        session_posts = []
+        try:
+            session_posts = await asyncio.wait_for(
+                LinkedInSessionSearch.search_posts_internal_async(
+                    keywords=intent.target_role,
+                    date_posted=timeframe,
+                    max_results=max_results,
+                    skills_taxonomy=self.skills_taxonomy,
+                    target_role=intent.target_role,
+                    target_location=intent.target_location,
+                    debug=debug
+                ),
+                timeout=6.0
+            )
+        except Exception as e:
+            session_posts = []
+
         if session_posts:
             session_posts.sort(key=lambda x: x.get("post_quality_score", 0), reverse=True)
             self.cache.set(cache_key, session_posts, timeframe=timeframe)
