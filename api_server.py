@@ -473,6 +473,19 @@ async def mcp_message_handler(request: Request):
                         }
                     },
                     {
+                        "name": "search_hiring_posts",
+                        "description": "Searches for active LinkedIn recruiter & founder hiring posts by role and location.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "role": { "type": "string", "description": "Target job role (e.g. 'React Developer', 'Python')", "default": "Software Engineer" },
+                                "location": { "type": "string", "description": "Target location (default: India)", "default": "India" },
+                                "timeframe": { "type": "string", "description": "Recency: past-1h, past-4h, past-12h, past-24h, past-7d", "default": "past-24h" },
+                                "max_results": { "type": "integer", "description": "Max results to return", "default": 20 }
+                            }
+                        }
+                    },
+                    {
                         "name": "search_linkedin_hiring",
                         "description": "Searches for active LinkedIn recruiter & founder hiring posts by role and location.",
                         "inputSchema": {
@@ -620,9 +633,9 @@ async def mcp_message_handler(request: Request):
                     "result": {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
                 }
 
-            elif tool_name == "search_linkedin_hiring":
+            elif tool_name in ["search_linkedin_hiring", "search_hiring_posts"]:
                 res = await service.search_opportunities_async(
-                    query=args.get("role") or args.get("query") or "Software Engineer",
+                    query=args.get("role") or args.get("query") or args.get("keywords") or "Software Engineer",
                     location=args.get("location", "India"),
                     timeframe=args.get("timeframe", "past-24h"),
                     max_results=int(args.get("max_results", 20))

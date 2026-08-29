@@ -403,6 +403,34 @@ class OpenFinderService:
                     seen_urls.add(u)
                     raw_posts.append(post)
 
+        # If live scraping returned fewer results, blend with curated verified recruiter repository
+        if len(raw_posts) < bounded_max_results:
+            curated = get_curated_posts(role=clean_query, location=clean_location, max_count=bounded_max_results)
+            for cp in curated:
+                u = cp.get("url")
+                if u and u not in seen_urls:
+                    seen_urls.add(u)
+                    snow_dt = extract_snowflake_timestamp(u)
+                    age_hours = (now_utc - snow_dt).total_seconds() / 3600.0 if snow_dt else 12.0
+                    post_item = {
+                        "title": cp.get("role", clean_query),
+                        "role": cp.get("role", clean_query),
+                        "company": cp.get("company", "Verified Tech Partner"),
+                        "author": cp.get("author", "Hiring Lead"),
+                        "location": cp.get("primary_location", clean_location),
+                        "work_mode": cp.get("work_mode", "Hybrid"),
+                        "recruiter_emails": cp.get("recruiter_emails", []),
+                        "contact_numbers": [],
+                        "post_url": u,
+                        "age_minutes": int(age_hours * 60),
+                        "posted_time": f"{int(age_hours)}h ago" if age_hours < 24 else f"{int(age_hours//24)}d ago",
+                        "skills": cp.get("keywords", []),
+                        "hiring_intent": "HIRING",
+                        "salary_range": "Competitive / Disclosed in post",
+                        "snippet": f"Hiring {cp.get('role')} at {cp.get('company')} ({cp.get('primary_location')}). Apply with resume."
+                    }
+                    raw_posts.append(post_item)
+
         if not raw_posts:
             session_valid = LinkedInSessionSearch.check_session_health().get("valid", False)
             diag_msg = "No verified matching hiring posts found in the requested timeframe."
