@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import DEFAULT_LOCATION, DEFAULT_MAX_RESULTS, DEFAULT_TIMEFRAME, ErrorCodes
 from core.linkedin_finder import LinkedInFinder
 from core.linkedin_session import LinkedInSessionSearch
+from core.live_repository import get_curated_posts
 from core.pitch_generator import OutreachPitchGenerator
 from core.post_extractor import LinkedInPostExtractor
 from core.profile_store import CandidateProfileStore
@@ -426,6 +427,8 @@ class OpenFinderService:
                         "posted_time": f"{int(age_hours)}h ago" if age_hours < 24 else f"{int(age_hours//24)}d ago",
                         "skills": cp.get("keywords", []),
                         "hiring_intent": "HIRING",
+                        "is_live_post": False,
+                        "source_type": "Curated Directory (Fallback)",
                         "salary_range": "Competitive / Disclosed in post",
                         "snippet": f"Hiring {cp.get('role')} at {cp.get('company')} ({cp.get('primary_location')}). Apply with resume."
                     }
@@ -470,6 +473,8 @@ class OpenFinderService:
                 "author": p.get("author", "Hiring Manager"),
                 "author_type": p.get("author_type", "RECRUITER"),
                 "location": p.get("location", "Unspecified / Remote"),
+                "is_live_post": p.get("is_live_post", True),
+                "source_type": p.get("source_type", "Live LinkedIn Post"),
                 "posted_time": p.get("posted_time") or p.get("age_text") or "Recently",
                 "published_at": p.get("published_at"),
                 "age_minutes": p.get("age_minutes", 0),

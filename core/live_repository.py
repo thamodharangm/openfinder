@@ -448,3 +448,7 @@ def get_repository_stats() -> Dict[str, Any]:
         "locations_distribution": dict(cities.most_common(10)),
         "roles_distribution": dict(roles.most_common(10)),
     }
+
+
+# Canonical alias for compatibility
+get_curated_posts = find_matching_post_records
