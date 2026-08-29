@@ -176,6 +176,7 @@ class LinkedInFinder:
         timeframe: str = "past-24h",
         remote_only: bool = False,
         max_results: int = DEFAULT_MAX_RESULTS,
+        candidate_profile: Optional[Dict[str, Any]] = None,
         debug: bool = False
     ) -> List[Dict[str, Any]]:
         """
@@ -191,8 +192,6 @@ class LinkedInFinder:
         )
 
         max_age_minutes = intent.max_age_minutes
-        # NOTE: max_results is intentionally excluded from the cache key.
-        # The cache stores the full result set; callers slice to max_results at read-time.
         cache_key = f"hiring_posts::{intent.target_role}::{intent.target_location}::{timeframe}::{remote_only}"
         
         if not debug:
@@ -222,6 +221,7 @@ class LinkedInFinder:
                     skills_taxonomy=self.skills_taxonomy,
                     target_role=intent.target_role,
                     target_location=intent.target_location,
+                    candidate_profile=candidate_profile,
                     debug=debug
                 ),
                 timeout=6.0
