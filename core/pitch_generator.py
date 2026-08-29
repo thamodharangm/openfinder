@@ -153,35 +153,29 @@ class OutreachPitchGenerator:
             f"Thanks a lot for your time!\n{candidate_name}"
         )
 
-        # 6. Formal Executive Cover Email
+        # 6. Direct Recruiter Email Pitch (Concise, High-Converting Format)
         email_subject = f"Application: {job_title} - {candidate_name} ({primary_skill})"
-        email_signature_parts = [
-            f"Sincerely,\n{candidate_name}",
-            candidate_phone if candidate_phone else "[Your Phone Number]",
-            f"LinkedIn: {candidate_linkedin}" if candidate_linkedin else "[LinkedIn Profile Link]",
-        ]
-        if candidate_portfolio:
-            email_signature_parts.append(f"Portfolio: {candidate_portfolio}")
-        if candidate_github:
-            email_signature_parts.append(f"GitHub: {candidate_github}")
-
-        signature_block = "\n".join(email_signature_parts)
-
+        
         email_body = (
-            f"Dear {formal_recipient},\n\n"
-            f"I am writing to express my strong interest in the {job_title} role at {company_clean} as shared on LinkedIn.\n\n"
-            f"With over {candidate_exp_years}+ years of professional experience specializing in {skills_str}, "
-            f"I have delivered production-grade, scalable solutions with a consistent focus on code quality, performance, and agile delivery.\n\n"
-            f"Core strengths I would bring to {company_clean}:\n"
-            f"• Deep technical proficiency across {skills_str}.\n"
-            f"• Strong experience designing maintainable backend architectures and responsive user experiences.\n"
-            f"• Proven ability to collaborate cross-functionally and deliver impactful results under tight deadlines.\n\n"
-            f"Please find my resume attached for your review. I would welcome the opportunity to discuss how my qualifications "
-            f"align with your team's upcoming milestones.\n\n"
-            f"{signature_block}"
+            f"Hi {greeting_name},\n\n"
+            f"I came across your hiring announcement for the {job_title} role at {company_clean}. "
+            f"With {candidate_exp_years}+ years of practical experience working with {skills_str}, "
+            f"I am confident in delivering immediate value to your engineering team.\n\n"
+            f"I have attached my resume for your consideration. Looking forward to discussing how my skillset aligns with {company_clean}'s goals.\n\n"
+            f"Best regards,\n{candidate_name}"
         )
 
-        formal_email = f"Subject: {email_subject}\n\n{email_body}"
+        if candidate_phone or candidate_linkedin or candidate_github:
+            contact_lines = ["\n---"]
+            if candidate_phone:
+                contact_lines.append(f"Phone: {candidate_phone}")
+            if candidate_linkedin:
+                contact_lines.append(f"LinkedIn: {candidate_linkedin}")
+            if candidate_github:
+                contact_lines.append(f"GitHub: {candidate_github}")
+            email_body += "\n" + "\n".join(contact_lines)
+
+        formal_email = f"To: {recipient_email or '[Recruiter Email]'}\nSubject: {email_subject}\n\n{email_body}"
 
         # 7. Day-3 & Day-7 Follow-up Sequences
         day3_follow_up = (
@@ -222,6 +216,7 @@ class OutreachPitchGenerator:
             "founder_pitch": founder_pitch,
             "referral_pitch": referral_pitch,
             "formal_cover_email": formal_email,
+            "direct_recruiter_email_pitch": formal_email,
             "email_subject": email_subject,
             "email_body": email_body,
             "recipient_email": to_email,
