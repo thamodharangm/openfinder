@@ -283,6 +283,10 @@ async def mcp_message_handler(request: Request):
     params = body.get("params", {})
     client_proto = params.get("protocolVersion", "2024-11-05")
 
+    # If it's a notification (no id or starts with notifications/), return HTTP 200 immediately
+    if req_id is None or (method and method.startswith("notifications/")):
+        return Response(status_code=200)
+
     response_payload = None
 
     # 1. Initialize
@@ -295,6 +299,12 @@ async def mcp_message_handler(request: Request):
                 "capabilities": {
                     "tools": {
                         "listChanged": False
+                    },
+                    "resources": {
+                        "listChanged": False
+                    },
+                    "prompts": {
+                        "listChanged": False
                     }
                 },
                 "serverInfo": {
@@ -304,15 +314,51 @@ async def mcp_message_handler(request: Request):
             }
         }
 
-    # 2. Notifications
-    elif method == "notifications/initialized":
-        return Response(status_code=200)
-
-    # 3. Ping
+    # 2. Ping
     elif method == "ping":
         response_payload = {"jsonrpc": "2.0", "id": req_id, "result": {}}
 
-    # 4. Tools List
+    # 3. Resources (Standard MCP)
+    elif method in ["resources/list", "resources/templates/list"]:
+        response_payload = {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {"resources": []} if method == "resources/list" else {"resourceTemplates": []}
+        }
+
+    # 4. Prompts (Standard MCP)
+    elif method == "prompts/list":
+        response_payload = {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {"prompts": []}
+        }
+
+    # 5. Roots (Standard MCP)
+    elif method == "roots/list":
+        response_payload = {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {"roots": []}
+        }
+
+    # 6. Logging (Standard MCP)
+    elif method == "logging/setLevel":
+        response_payload = {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {}
+        }
+
+    # 7. Completion (Standard MCP)
+    elif method == "completion/complete":
+        response_payload = {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {"completion": {"values": []}}
+        }
+
+    # 8. Tools List
     elif method == "tools/list":
         response_payload = {
             "jsonrpc": "2.0",
@@ -328,7 +374,7 @@ async def mcp_message_handler(request: Request):
                                 "query": { "type": "string", "description": "Job role or technical skills (e.g. 'React Developer', 'Python FastAPI')", "default": "React Developer" },
                                 "location": { "type": "string", "description": "City or Region (e.g. 'Bangalore', 'Remote', 'India')", "default": "India" },
                                 "timeframe": { "type": "string", "description": "Freshness window ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d')", "default": "past-24h" },
-                                "max_results": { "type": "integer", "description": "Max opportunities (1-30)", "default": 23 },
+                                "max_results": { "type": "integer", "description": "Max opportunities (1-50)", "default": 20 },
                                 "remote_only": { "type": "boolean", "description": "Filter for remote positions only", "default": False },
                                 "candidate_profile_id": { "type": "string", "description": "Optional stored candidate profile ID for ATS skill & experience matching" },
                                 "candidate_skills": { "type": "string", "description": "Comma-separated technical skills (e.g. 'React, Node.js, Express, MongoDB')" },
@@ -350,31 +396,41 @@ async def mcp_message_handler(request: Request):
                         }
                     },
                     {
+                        "name": "upload_resume",
+                        "description": "Uploads and parses a PDF resume file path to create a candidate profile.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "file_path": { "type": "string", "description": "Absolute or relative file path to the resume PDF" }
+                            },
+                            "required": ["file_path"]
+                        }
+                    },
+                    {
                         "name": "get_candidate_profile",
                         "description": "Retrieves a stored candidate resume profile by its unique candidate_profile_id.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
-                                "candidate_profile_id": { "type": "string", "description": "Unique candidate profile ID (e.g. 'prof_a1b2c3d4e5f6')" }
-                            },
-                            "required": ["candidate_profile_id"]
+                                "candidate_profile_id": { "type": "string", "description": "Unique candidate profile ID (e.g. 'prof_a1b2c3d4e5f6')" },
+                                "profile_id": { "type": "string", "description": "Alias for candidate_profile_id" }
+                            }
                         }
                     },
                     {
                         "name": "generate_recruiter_pitch",
-                        "description": "Generates 4 personalized recruiter outreach formats (Connection Note <300 chars, InMail, Formal Cover Email with 1-Click 'Open in Mail App' button/mailto deep link, Follow-Up).",
+                        "description": "Generates personalized recruiter outreach formats (Connection Note <300 chars, InMail, Formal Cover Email with 1-Click 'Open in Mail App' deep links).",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
-                                "job_title": { "type": "string", "description": "Target job title" },
+                                "job_title": { "type": "string", "description": "Target job title", "default": "Software Engineer" },
                                 "company_name": { "type": "string", "description": "Target company name", "default": "Hiring Team" },
-                                "matched_skills": { "type": "string", "description": "Key candidate skills", "default": "React" },
+                                "matched_skills": { "type": "string", "description": "Key candidate skills (comma separated)", "default": "React, Python" },
                                 "candidate_name": { "type": "string", "description": "Candidate name", "default": "Candidate" },
                                 "candidate_exp_years": { "type": "integer", "description": "Candidate total years of experience", "default": 1 },
                                 "recipient_name": { "type": "string", "description": "Recruiter / Hiring Manager name", "default": "Hiring Team" },
                                 "recipient_email": { "type": "string", "description": "Recruiter contact email (e.g. 'hr@company.com')" }
-                            },
-                            "required": ["job_title"]
+                            }
                         }
                     },
                     {
@@ -384,109 +440,232 @@ async def mcp_message_handler(request: Request):
                             "type": "object",
                             "properties": {
                                 "post_url": { "type": "string", "description": "The direct LinkedIn post URL (e.g. https://www.linkedin.com/posts/...)" },
+                                "url": { "type": "string", "description": "Alias for post_url" },
+                                "candidate_profile_id": { "type": "string", "description": "Optional stored candidate profile ID" },
                                 "candidate_name": { "type": "string", "description": "Candidate's full name for customized pitches", "default": "Candidate" },
                                 "candidate_exp_years": { "type": "integer", "description": "Candidate's total years of experience", "default": 0 }
+                            }
+                        }
+                    },
+                    {
+                        "name": "parse_resume",
+                        "description": "Parses a resume PDF file and extracts technical skills, experience, and contact details without storing.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "file_path": { "type": "string", "description": "File path to the resume PDF" }
                             },
-                            "required": ["post_url"]
+                            "required": ["file_path"]
+                        }
+                    },
+                    {
+                        "name": "search_jobs_by_resume",
+                        "description": "Parses resume text or PDF, automatically extracts skills, and searches matching LinkedIn opportunities in one step.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "resume_text": { "type": "string", "description": "Plain text content of the candidate's resume" },
+                                "file_path": { "type": "string", "description": "Optional path to resume PDF" },
+                                "location": { "type": "string", "description": "Target job location (default: India)", "default": "India" },
+                                "timeframe": { "type": "string", "description": "Freshness window ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d')", "default": "past-24h" },
+                                "max_results": { "type": "integer", "description": "Max opportunities to return", "default": 20 }
+                            }
+                        }
+                    },
+                    {
+                        "name": "search_linkedin_hiring",
+                        "description": "Searches for active LinkedIn recruiter & founder hiring posts by role and location.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "role": { "type": "string", "description": "Target job role (e.g. 'React Developer', 'Python')", "default": "Software Engineer" },
+                                "location": { "type": "string", "description": "Target location (default: India)", "default": "India" },
+                                "timeframe": { "type": "string", "description": "Recency: past-1h, past-4h, past-12h, past-24h, past-7d", "default": "past-24h" },
+                                "max_results": { "type": "integer", "description": "Max results to return", "default": 20 }
+                            }
                         }
                     },
                     {
                         "name": "search_posts",
-                        "description": "Searches global LinkedIn /posts/ by keyword (the 'Posts' tab) with exact freshness filters ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d') and extracts HR contact emails, phone numbers, and tech stack. CRITICAL DISPLAY RULE: Always present results strictly as a horizontal Markdown table with columns: # | Company | Role | Experience | Location | Posted Time | HR Contact / Email | Direct Link. Never output vertical lists.",
+                        "description": "Searches global LinkedIn /posts/ by keyword (the 'Posts' tab) with exact freshness filters ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d').",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
                                 "keywords": { "type": "string", "description": "Search query for LinkedIn posts (e.g. 'React Developer hiring Bangalore')" },
+                                "query": { "type": "string", "description": "Alias for keywords" },
                                 "date_posted": { "type": "string", "description": "Recency filter: 'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d'", "default": "past-24h" },
-                                "max_results": { "type": "integer", "description": "Max number of posts to fetch", "default": 23 }
-                            },
-                            "required": ["keywords"]
+                                "timeframe": { "type": "string", "description": "Alias for date_posted" },
+                                "max_results": { "type": "integer", "description": "Max number of posts to fetch", "default": 20 }
+                            }
                         }
                     }
                 ]
             }
         }
 
-    # 5. Tools Call
+    # 9. Tools Call
     elif method == "tools/call":
         tool_name = params.get("name")
         args = params.get("arguments", {})
 
-        if tool_name == "search_opportunities":
-            res = await service.search_opportunities_async(
-                query=args.get("query", "React Developer"),
-                location=args.get("location", "India"),
-                timeframe=args.get("timeframe", "past-24h"),
-                max_results=args.get("max_results", 10),
-                remote_only=args.get("remote_only", False),
-                candidate_profile_id=args.get("candidate_profile_id"),
-                candidate_skills=args.get("candidate_skills"),
-                candidate_exp_years=args.get("candidate_exp_years"),
-                candidate_name=args.get("candidate_name")
-            )
-            response_payload = {
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
-            }
+        try:
+            if tool_name == "search_opportunities":
+                res = await service.search_opportunities_async(
+                    query=args.get("query") or args.get("role") or args.get("keywords") or "React Developer",
+                    location=args.get("location", "India"),
+                    timeframe=args.get("timeframe") or args.get("date_posted") or "past-24h",
+                    max_results=int(args.get("max_results", 20)),
+                    remote_only=bool(args.get("remote_only", False)),
+                    candidate_profile_id=args.get("candidate_profile_id") or args.get("profile_id"),
+                    candidate_skills=args.get("candidate_skills"),
+                    candidate_exp_years=args.get("candidate_exp_years"),
+                    candidate_name=args.get("candidate_name")
+                )
+                response_payload = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
+                }
 
-        elif tool_name == "upload_resume_text":
-            resume_text = args.get("resume_text", "")
-            res = service.upload_resume_text(resume_text)
-            response_payload = {
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
-            }
+            elif tool_name == "upload_resume_text":
+                resume_text = args.get("resume_text") or args.get("text") or args.get("cv_text") or ""
+                res = service.upload_resume_text(resume_text)
+                response_payload = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
+                }
 
-        elif tool_name == "get_candidate_profile":
-            prof = service.get_candidate_profile(args.get("candidate_profile_id", ""))
-            response_payload = {
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": {"content": [{"type": "text", "text": json.dumps(prof, indent=2)}]}
-            }
+            elif tool_name == "upload_resume":
+                file_path = args.get("file_path") or args.get("resume_path") or ""
+                res = service.upload_resume(file_path)
+                response_payload = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
+                }
 
-        elif tool_name == "generate_recruiter_pitch":
-            pitches = service.generate_pitch(
-                job_title=args.get("job_title", "Software Engineer"),
-                company_name=args.get("company_name", "Hiring Team"),
-                matched_skills=[s.strip() for s in args.get("matched_skills", "React").split(",") if s.strip()],
-                candidate_name=args.get("candidate_name", "Candidate"),
-                candidate_exp_years=int(args.get("candidate_exp_years", 1)),
-                recipient_name=args.get("recipient_name") or args.get("author"),
-                recipient_email=args.get("recipient_email") or args.get("hr_email")
-            )
-            response_payload = {
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": {"content": [{"type": "text", "text": json.dumps({"status": "success", "pitches": pitches}, indent=2)}]}
-            }
+            elif tool_name == "get_candidate_profile":
+                pid = args.get("candidate_profile_id") or args.get("profile_id") or ""
+                prof = service.get_candidate_profile(pid)
+                response_payload = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {"content": [{"type": "text", "text": json.dumps(prof, indent=2)}]}
+                }
 
-        elif tool_name == "parse_linkedin_post":
-            post_data = await asyncio.to_thread(
-                service.parse_linkedin_post,
-                url=args.get("post_url", ""),
-                candidate_profile_id=args.get("candidate_profile_id")
-            )
-            response_payload = {
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": {"content": [{"type": "text", "text": json.dumps({"status": "success", "post": post_data}, indent=2)}]}
-            }
+            elif tool_name == "generate_recruiter_pitch":
+                raw_skills = args.get("matched_skills", "React, Python")
+                if isinstance(raw_skills, list):
+                    skills_list = raw_skills
+                else:
+                    skills_list = [s.strip() for s in str(raw_skills).split(",") if s.strip()]
+                pitches = service.generate_pitch(
+                    job_title=args.get("job_title", "Software Engineer"),
+                    company_name=args.get("company_name", "Hiring Team"),
+                    matched_skills=skills_list,
+                    candidate_name=args.get("candidate_name", "Candidate"),
+                    candidate_exp_years=int(args.get("candidate_exp_years", 1)),
+                    recipient_name=args.get("recipient_name") or args.get("author"),
+                    recipient_email=args.get("recipient_email") or args.get("hr_email")
+                )
+                response_payload = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {"content": [{"type": "text", "text": json.dumps({"status": "success", "pitches": pitches}, indent=2)}]}
+                }
 
-        elif tool_name == "search_posts":
-            posts = await asyncio.to_thread(
-                linkedin_finder.search_posts,
-                keywords=args.get("keywords", "React Developer hiring"),
-                date_posted=args.get("date_posted", "past-24h"),
-                max_results=args.get("max_results", 23)
-            )
-            table = LinkedInFinder.format_as_markdown_table(posts)
+            elif tool_name == "parse_linkedin_post":
+                post_data = await asyncio.to_thread(
+                    service.parse_linkedin_post,
+                    url=args.get("post_url") or args.get("url") or "",
+                    candidate_profile_id=args.get("candidate_profile_id") or args.get("profile_id")
+                )
+                response_payload = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {"content": [{"type": "text", "text": json.dumps({"status": "success", "post": post_data}, indent=2)}]}
+                }
+
+            elif tool_name == "parse_resume":
+                f_path = args.get("file_path") or args.get("resume_path") or ""
+                parsed = await asyncio.to_thread(service.resume_parser.parse, f_path)
+                response_payload = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {"content": [{"type": "text", "text": json.dumps({"status": "success", "profile": parsed}, indent=2)}]}
+                }
+
+            elif tool_name == "search_jobs_by_resume":
+                res_text = args.get("resume_text", "")
+                f_path = args.get("file_path", "")
+                profile_id = None
+                if res_text:
+                    up = service.upload_resume_text(res_text)
+                    profile_id = up.get("candidate_profile_id")
+                elif f_path:
+                    up = service.upload_resume(f_path)
+                    profile_id = up.get("candidate_profile_id")
+
+                res = await service.search_opportunities_async(
+                    query=args.get("query", "Software Developer"),
+                    location=args.get("location", "India"),
+                    timeframe=args.get("timeframe", "past-24h"),
+                    max_results=int(args.get("max_results", 20)),
+                    candidate_profile_id=profile_id
+                )
+                response_payload = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
+                }
+
+            elif tool_name == "search_linkedin_hiring":
+                res = await service.search_opportunities_async(
+                    query=args.get("role") or args.get("query") or "Software Engineer",
+                    location=args.get("location", "India"),
+                    timeframe=args.get("timeframe", "past-24h"),
+                    max_results=int(args.get("max_results", 20))
+                )
+                response_payload = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
+                }
+
+            elif tool_name == "search_posts":
+                posts = await asyncio.to_thread(
+                    linkedin_finder.search_posts,
+                    keywords=args.get("keywords") or args.get("query") or "React Developer hiring",
+                    date_posted=args.get("date_posted") or args.get("timeframe") or "past-24h",
+                    max_results=int(args.get("max_results", 20))
+                )
+                table = LinkedInFinder.format_as_markdown_table(posts)
+                response_payload = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {"content": [{"type": "text", "text": json.dumps({"status": "success", "count": len(posts), "markdown_table": table, "posts": posts}, indent=2)}]}
+                }
+
+            else:
+                # Standard MCP error response inside result
+                response_payload = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {
+                        "isError": True,
+                        "content": [{"type": "text", "text": f"Tool '{tool_name}' not found."}]
+                    }
+                }
+        except Exception as tool_exc:
+            logger.error(f"❌ [Tool Execution Error] in '{tool_name}': {tool_exc}")
             response_payload = {
                 "jsonrpc": "2.0",
                 "id": req_id,
-                "result": {"content": [{"type": "text", "text": json.dumps({"status": "success", "count": len(posts), "markdown_table": table, "posts": posts}, indent=2)}]}
+                "result": {
+                    "isError": True,
+                    "content": [{"type": "text", "text": f"Error executing tool '{tool_name}': {str(tool_exc)}"}]
+                }
             }
 
     try:
@@ -497,6 +676,7 @@ async def mcp_message_handler(request: Request):
                 return Response(status_code=202)
             return JSONResponse(content=response_payload)
 
+        # Fallback for any unknown method
         return JSONResponse(
             content={"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": f"Method '{method}' not found"}}
         )
@@ -505,7 +685,7 @@ async def mcp_message_handler(request: Request):
         error_resp = {
             "jsonrpc": "2.0",
             "id": req_id,
-            "result": {"content": [{"type": "text", "text": json.dumps({"status": "error", "error": str(exc)}, indent=2)}]}
+            "result": {"isError": True, "content": [{"type": "text", "text": json.dumps({"status": "error", "error": str(exc)}, indent=2)}]}
         }
         session_id = request.query_params.get("session_id")
         if session_id and session_id in sessions:
