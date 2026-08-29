@@ -63,7 +63,7 @@ TOOLS = [
             "properties": {
                 "query": {"type": "string", "description": "Role or tech stack (e.g. 'React Developer', 'Python FastAPI')", "default": "Software Engineer"},
                 "location": {"type": "string", "description": "Target city/country (e.g. 'Bangalore', 'Remote', 'India')", "default": "India"},
-                "timeframe": {"type": "string", "description": "Freshness: 'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d'", "default": "past-24h"},
+                "timeframe": {"type": "string", "description": "Freshness: 'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-3d'", "default": "past-24h"},
                 "max_results": {"type": "integer", "description": "Max opportunities (1-30)", "default": 20},
                 "remote_only": {"type": "boolean", "description": "Filter remote roles only", "default": False},
                 "candidate_profile_id": {"type": "string", "description": "Optional profile ID for ATS matching"},

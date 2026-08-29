@@ -275,15 +275,36 @@ class OpenFinderService:
 
         results_lists = await asyncio.gather(*search_tasks, return_exceptions=True)
 
+        from datetime import datetime, timezone
+        from core.time_utils import extract_snowflake_timestamp
+        now_utc = datetime.now(timezone.utc)
+
         seen_urls = set()
         raw_posts = []
         for res_list in results_lists:
             if isinstance(res_list, list):
                 for post in res_list:
                     u = post.get("post_url")
-                    if u and u not in seen_urls:
-                        seen_urls.add(u)
-                        raw_posts.append(post)
+                    if not u or u in seen_urls:
+                        continue
+                    
+                    # Strict Snowflake and age verification
+                    snow_dt = extract_snowflake_timestamp(u)
+                    if snow_dt is not None:
+                        age_hours = (now_utc - snow_dt).total_seconds() / 3600.0
+                        # REJECT if older than max_age_min (e.g. 72h for past-3d, 24h for past-24h)
+                        if age_hours > (max_age_min / 60.0):
+                            continue
+                        post["age_minutes"] = int(age_hours * 60)
+                        post["age_hours"] = round(age_hours, 1)
+                        post["posted_time"] = f"{int(age_hours)}h {int((age_hours%1)*60)}m ago" if age_hours < 24 else f"{int(age_hours//24)}d {int(age_hours%24)}h ago"
+                    else:
+                        posted_str = (post.get("posted_time") or post.get("age_text") or "").lower()
+                        if any(w in posted_str for w in ["4d", "5d", "6d", "7d", "13d", "38d", "94d", "month", "yr", "year", "weeks", "w ago"]):
+                            continue
+
+                    seen_urls.add(u)
+                    raw_posts.append(post)
 
         if not raw_posts:
             session_valid = LinkedInSessionSearch.check_session_health().get("valid", False)

@@ -30,9 +30,11 @@ TIMEFRAME_TTLS = {
     "past-4h": 300,      # 5 minutes
     "past-12h": 900,     # 15 minutes
     "past-24h": 1800,    # 30 minutes
-    "past-7d": 7200,     # 2 hours
-    "w": 7200,
-    "past-week": 7200,
+    "past-3d": 3600,     # 1 hour
+    "3d": 3600,
+    "past-7d": 3600,     # 1 hour
+    "w": 3600,
+    "past-week": 3600,
     "default": 1800
 }
 

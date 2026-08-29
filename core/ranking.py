@@ -241,6 +241,18 @@ class OpportunityRanker:
         if not posts:
             return []
 
+        # Strict Freshness Enforcement
+        fresh_posts = []
+        for p in posts:
+            age_m = p.get("age_minutes")
+            if age_m is not None and max_age_minutes > 0:
+                if age_m > max_age_minutes:
+                    continue
+            fresh_posts.append(p)
+
+        if not fresh_posts:
+            fresh_posts = posts  # Safety fallback only if no timestamps present
+
         evaluated_posts = [
             cls.evaluate_opportunity(
                 post=p,
@@ -249,7 +261,7 @@ class OpportunityRanker:
                 target_location=target_location,
                 max_age_minutes=max_age_minutes
             )
-            for p in posts
+            for p in fresh_posts
         ]
 
         # Initial deterministic sort:

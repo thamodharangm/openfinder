@@ -9,7 +9,8 @@ FRESHNESS_WINDOWS: Dict[str, int] = {
     "past-4h": 240,
     "past-12h": 720,
     "past-24h": 1440,
-    "past-7d": 10080,
+    "past-3d": 4320,
+    "past-7d": 4320,  # Enforce strict max 3-day window (4320 minutes)
 }
 
 # Supported aliases for backward compatibility with existing MCP / REST clients
@@ -21,12 +22,16 @@ TIMEFRAME_ALIASES: Dict[str, str] = {
     "1d": "past-24h",
     "d": "past-24h",
     "past-day": "past-24h",
-    "7d": "past-7d",
-    "1w": "past-7d",
-    "w": "past-7d",
-    "past-week": "past-7d",
-    "past-month": "past-7d",  # Constrain past-month default to max 7d for freshness
-    "m": "past-7d",
+    "3d": "past-3d",
+    "3days": "past-3d",
+    "past-3d": "past-3d",
+    "past-3days": "past-3d",
+    "7d": "past-3d",
+    "1w": "past-3d",
+    "w": "past-3d",
+    "past-week": "past-3d",
+    "past-month": "past-3d",
+    "m": "past-3d",
 }
 
 
