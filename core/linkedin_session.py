@@ -25,6 +25,7 @@ from core.time_utils import (
 from core.search_intent import SearchIntentParser, SearchIntent
 from core.post_extractor import LinkedInPostExtractor
 from config import COMMON_SKILLS
+from core.matcher import JobMatcher  # Deep Multi-Dimensional Matcher
 
 
 class LinkedInSessionSearch:
@@ -32,7 +33,7 @@ class LinkedInSessionSearch:
     High-Performance Asynchronous LinkedIn Content Search & Discovery Engine.
     Queries LinkedIn's internal 'Posts' Search Tab (/search/results/content/)
     with connection pooling, multi-query expansion, bounded async batch extraction,
-    and granular timing metrics.
+    deep multi-dimensional matching, and granular timing metrics.
     """
 
     HEADERS = {
@@ -105,13 +106,14 @@ class LinkedInSessionSearch:
         skills_taxonomy: Optional[List[str]] = None,
         target_role: Optional[str] = None,
         target_location: Optional[str] = None,
+        candidate_profile: Optional[Dict[str, Any]] = None,
         max_discovery_candidates: int = 40,
         max_concurrency: int = MAX_CONCURRENCY,
         debug: bool = False
     ) -> List[Dict[str, Any]]:
         """
         Asynchronously searches LinkedIn posts with connection pooling, multi-query expansion,
-        bounded concurrent extraction, and timing metrics.
+        bounded concurrent extraction, deep multidimensional matching, and timing metrics.
         """
         t_start = time.perf_counter()
 
@@ -121,7 +123,7 @@ class LinkedInSessionSearch:
 
         cookies = cls.get_cookies_dict()
         skills_taxonomy = skills_taxonomy or COMMON_SKILLS
-        
+
         intent = SearchIntentParser.parse(
             keywords=target_role or keywords,
             location=target_location or "India",
@@ -139,7 +141,7 @@ class LinkedInSessionSearch:
         elif max_age_minutes <= 1440:    # past-24h
             max_queries = 4
             max_pages = 3
-        else:                            # past-7d
+        else:                            # past-3d / past-7d
             max_queries = 5
             max_pages = 4
 
@@ -148,6 +150,18 @@ class LinkedInSessionSearch:
         headers = dict(cls.HEADERS)
         if "JSESSIONID" in cookies:
             headers["csrf-token"] = cookies["JSESSIONID"].strip('"')
+
+        # Build candidate profile if not provided
+        if candidate_profile is None:
+            candidate_profile = {
+                "skills": skills_taxonomy or [],
+                "experience_years": 0,
+                "desired_roles": [target_role] if target_role else [],
+                "desired_domains": [],
+                "preferred_locations": [target_location] if target_location else [],
+                "remote_preference": "any",
+                "education": {}
+            }
 
         metrics = {
             "queries_attempted": 0,
@@ -163,6 +177,17 @@ class LinkedInSessionSearch:
         }
 
         query_variants = intent.generate_diverse_session_queries(max_queries=max_queries)
+
+        if candidate_profile.get("skills"):
+            skill_terms = " ".join(candidate_profile["skills"][:5])
+            query_variants.append(f"{target_role or keywords} {skill_terms}".strip())
+        if candidate_profile.get("desired_domains"):
+            domain_terms = " ".join(candidate_profile["desired_domains"][:3])
+            query_variants.append(f"{target_role or keywords} {domain_terms}".strip())
+
+        seen = set()
+        query_variants = [q for q in query_variants if not (q in seen or seen.add(q))]
+
         candidate_pool: List[Tuple[str, str, int]] = []
         discovered_urls_set: Set[str] = set()
 
@@ -259,7 +284,7 @@ class LinkedInSessionSearch:
         t_ext_end = time.perf_counter()
         metrics["timing_ms"]["extraction_time_ms"] = int((t_ext_end - t_ext_start) * 1000)
 
-        # 3. Deterministic Filtering & Quality Ranking Phase
+        # 3. Deep Matching & Ranking Phase
         t_rank_start = time.perf_counter()
         results = []
 
@@ -273,10 +298,25 @@ class LinkedInSessionSearch:
                 continue
             metrics["hiring_candidates"] += 1
 
-            role_score = post_data.get("role_match_score", 0)
-            if intent.role_family != "GENERAL_SOFTWARE" and role_score < 50:
+            job_post = {
+                "title": post_data.get("job_role", "Software Engineer"),
+                "required_skills": post_data.get("detected_skills", []),
+                "experience_required": post_data.get("experience_required", ""),
+                "description": post_data.get("full_post_content", "") or post_data.get("post_text", ""),
+                "domains": post_data.get("domains", []),
+                "location": post_data.get("location", ""),
+                "remote": post_data.get("remote", False),
+                "education_required": post_data.get("education_required", "")
+            }
+
+            deep_match = JobMatcher.calculate_deep_match(candidate_profile, job_post)
+            post_data.update(deep_match)
+
+            post_data["role_match_score"] = deep_match.get("role_score", post_data.get("role_match_score", 0))
+            post_data["location_match_score"] = deep_match.get("location_score", post_data.get("location_match_score", 0))
+
+            if deep_match["match_score"] < 35:
                 continue
-            metrics["role_candidates"] += 1
 
             p_url = post_data.get("post_url")
             cls._SEEN_POST_IDS.add(p_url)
@@ -297,10 +337,10 @@ class LinkedInSessionSearch:
                 "posted_time": post_data.get("age_text", "Recently"),
                 "hiring_intent": post_data.get("hiring_intent", "HIRING"),
                 "hiring_confidence": post_data.get("hiring_confidence", 0.9),
-                "role_match_score": role_score,
+                "role_match_score": deep_match.get("role_score", 0),
                 "role_match_reason": post_data.get("role_match_reason", ""),
-                "location_match_score": post_data.get("location_match_score", 100),
-                "experience_match_score": post_data.get("experience_match_score", 75),
+                "location_match_score": deep_match.get("location_score", 100),
+                "experience_match_score": deep_match.get("exp_score", 75),
                 "post_quality_score": post_data.get("post_quality_score", 85),
                 "is_spam": False,
                 "recruiter_emails": post_data.get("recruiter_emails", []),
@@ -312,20 +352,23 @@ class LinkedInSessionSearch:
                 "connection_pitch": pitch_note,
                 "discovery_source": "linkedin_session",
                 "query_matched": q_matched,
-                "page_found": p_page
+                "page_found": p_page,
+                "match_score": deep_match["match_score"],
+                "match_grade": deep_match["match_grade"],
+                "matched_skills": deep_match["matched_skills"],
+                "missing_skills": deep_match["missing_skills"],
+                "tech_score": deep_match["tech_score"],
+                "exp_score": deep_match["exp_score"],
+                "role_score": deep_match["role_score"],
+                "domain_score": deep_match["domain_score"],
+                "location_score": deep_match["location_score"],
+                "education_score": deep_match["education_score"],
+                "ats_recommendations": deep_match["ats_recommendations"],
             }
             results.append(compact_item)
 
-        # Multi-signal Opportunity Ranking & Deterministic Tie-Breakers
-        from core.ranking import OpportunityRanker
-        ranked_results = OpportunityRanker.rank_opportunities(
-            posts=results,
-            target_role=intent.target_role,
-            target_location=intent.target_location,
-            max_age_minutes=max_age_minutes,
-            apply_diversity=True
-        )
-        final_results = ranked_results[:max_results]
+        results.sort(key=lambda x: x["match_score"], reverse=True)
+        final_results = results[:max_results]
 
         t_rank_end = time.perf_counter()
         metrics["timing_ms"]["ranking_time_ms"] = int((t_rank_end - t_rank_start) * 1000)
@@ -347,6 +390,7 @@ class LinkedInSessionSearch:
         skills_taxonomy: Optional[List[str]] = None,
         target_role: Optional[str] = None,
         target_location: Optional[str] = None,
+        candidate_profile: Optional[Dict[str, Any]] = None,
         max_discovery_candidates: int = 40,
         max_concurrency: int = MAX_CONCURRENCY,
         debug: bool = False
@@ -357,8 +401,6 @@ class LinkedInSessionSearch:
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                # Running inside an active loop (e.g. FastAPI / Jupyter)
-                # Create a task in the loop or run directly
                 import nest_asyncio
                 nest_asyncio.apply()
                 return loop.run_until_complete(
@@ -369,6 +411,7 @@ class LinkedInSessionSearch:
                         skills_taxonomy=skills_taxonomy,
                         target_role=target_role,
                         target_location=target_location,
+                        candidate_profile=candidate_profile,
                         max_discovery_candidates=max_discovery_candidates,
                         max_concurrency=max_concurrency,
                         debug=debug
@@ -383,6 +426,7 @@ class LinkedInSessionSearch:
                         skills_taxonomy=skills_taxonomy,
                         target_role=target_role,
                         target_location=target_location,
+                        candidate_profile=candidate_profile,
                         max_discovery_candidates=max_discovery_candidates,
                         max_concurrency=max_concurrency,
                         debug=debug
@@ -397,6 +441,7 @@ class LinkedInSessionSearch:
                     skills_taxonomy=skills_taxonomy,
                     target_role=target_role,
                     target_location=target_location,
+                    candidate_profile=candidate_profile,
                     max_discovery_candidates=max_discovery_candidates,
                     max_concurrency=max_concurrency,
                     debug=debug
