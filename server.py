@@ -1,14 +1,38 @@
 """
-OpenFinder MCP Stdio Server
-Proxies Model Context Protocol (MCP) tool requests to the OpenFinder engine.
-Compatible with Claude Desktop, Cursor, and Antigravity across Windows, macOS, and Linux.
+server.py
+=========
+Production-grade Model Context Protocol (MCP) Stdio Server for OpenFinder.
+
+Compatible with:
+- Claude Desktop
+- Antigravity IDE
+- Cursor & VS Code MCP Extensions
+- Any standard JSON-RPC 2.0 Stdio Client across Windows, macOS, and Linux.
+
+Architecture:
+- High-Performance Hybrid Runner:
+  1. Direct in-process execution via `OpenFinderService` (Ultra-low latency, zero network hops).
+  2. Automatic HTTP API fallback if remote endpoint is configured.
+- Complete Tools Suite:
+  - `search_opportunities`: Exact freshness (past-1h to past-7d), ATS resume matching, and opportunity ranking.
+  - `upload_resume`: PDF CV parsing & persistent profile creation.
+  - `upload_resume_text`: Direct plain-text CV ingestion without disk files.
+  - `get_candidate_profile`: Retrieve stored candidate profiles across conversational turns.
+  - `generate_recruiter_pitch`: 1-Click Mailto, Gmail, and Outlook deep links + 4 outreach formats.
+  - `parse_linkedin_post`: Single post intelligence extractor.
+  - `parse_resume`: Stateless resume parser.
+  - `search_posts`: Global posts search with horizontal Markdown table formatting.
+  - `search_jobs_by_resume`: Combined PDF upload + immediate matching.
+- Robust stdio loop with UTF-8 encoding safeguards and graceful error isolation.
 """
 
-import sys
-import json
 import asyncio
-import httpx
+import json
+import logging
+import os
 from pathlib import Path
+import sys
+from typing import Any, Dict, List, Optional
 
 # Ensure UTF-8 stdout/stderr on Windows terminals
 if sys.platform == "win32":
@@ -18,15 +42,108 @@ if sys.platform == "win32":
     except AttributeError:
         pass
 
-BASE_URL = "https://openfinder.onrender.com"
+# Ensure project root is in sys.path
+BASE_DIR = Path(__file__).resolve().parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
-# ────────────────────────────────────────────────
-# Tool definitions
-# ────────────────────────────────────────────────
+from dotenv import load_dotenv
+load_dotenv()
+
+from core.linkedin_finder import LinkedInFinder
+from core.pitch_generator import OutreachPitchGenerator
+from core.post_extractor import LinkedInPostExtractor
+from core.resume_parser import ResumeParser
+from core.service import OpenFinderService
+
+# Initialize local in-process service engine
+service = OpenFinderService()
+resume_parser = ResumeParser()
+linkedin_finder = LinkedInFinder()
+
+# Optional remote fallback URL
+REMOTE_URL = os.environ.get("OPENFINDER_REMOTE_URL", "").rstrip("/")
+
+# ============================================================================
+# 1. MCP TOOLS TAXONOMY SPECIFICATION
+# ============================================================================
+
 TOOLS = [
     {
+        "name": "search_opportunities",
+        "description": (
+            "Canonical search tool discovering verified LinkedIn recruiter hiring /posts/ with exact "
+            "freshness validation ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-3d', 'past-7d'), "
+            "directional hiring intent, and opportunity ranking against candidate profile or inline skills."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Role or tech stack (e.g. 'React Developer', 'Python FastAPI')",
+                    "default": "Software Engineer"
+                },
+                "location": {
+                    "type": "string",
+                    "description": "Target city/country (e.g. 'Bangalore', 'Remote', 'India')",
+                    "default": "India"
+                },
+                "timeframe": {
+                    "type": "string",
+                    "description": "Freshness window: 'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-3d', 'past-7d'",
+                    "default": "past-24h"
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Max opportunities to return (default: 20)",
+                    "default": 20
+                },
+                "remote_only": {
+                    "type": "boolean",
+                    "description": "Filter for remote positions only",
+                    "default": False
+                },
+                "candidate_profile_id": {
+                    "type": "string",
+                    "description": "Optional stored profile ID for ATS skill & experience matching"
+                },
+                "candidate_skills": {
+                    "type": "string",
+                    "description": "Comma-separated technical skills for instant ATS matching (e.g. 'React, Node.js, Express')"
+                },
+                "candidate_exp_years": {
+                    "type": "integer",
+                    "description": "Candidate total years of experience"
+                },
+                "candidate_name": {
+                    "type": "string",
+                    "description": "Candidate full name"
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "upload_resume_text",
+        "description": (
+            "Parses candidate plain text CV and stores a persistent profile for ATS matching across search turns. "
+            "Returns a candidate_profile_id."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "resume_text": {
+                    "type": "string",
+                    "description": "Plain text content of the candidate's resume/CV."
+                }
+            },
+            "required": ["resume_text"]
+        }
+    },
+    {
         "name": "upload_resume",
-        "description": "Upload a PDF resume to OpenFinder. Returns a candidate_profile_id for personalised job searches.",
+        "description": "Upload a PDF resume to OpenFinder. Returns a candidate_profile_id for personalized job searches.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -40,7 +157,7 @@ TOOLS = [
     },
     {
         "name": "get_candidate_profile",
-        "description": "Retrieve a stored candidate profile by its ID.",
+        "description": "Retrieve a stored candidate profile by its unique candidate_profile_id.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -53,30 +170,77 @@ TOOLS = [
         }
     },
     {
-        "name": "search_opportunities",
+        "name": "generate_recruiter_pitch",
         "description": (
-            "Search verified LinkedIn hiring posts with ATS skill matching and freshness filters. "
-            "Optionally pass a candidate_profile_id or inline skills for ranked results."
+            "Generates 4 personalized recruiter outreach formats (Connection Note <300 chars, InMail, Formal Cover Email, "
+            "and 1-Click 'Open in Mail App', 'Open in Gmail Web', and 'Open in Outlook Web' deep links)."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Role or tech stack (e.g. 'React Developer', 'Python FastAPI')", "default": "Software Engineer"},
-                "location": {"type": "string", "description": "Target city/country (e.g. 'Bangalore', 'Remote', 'India')", "default": "India"},
-                "timeframe": {"type": "string", "description": "Freshness: 'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-3d'", "default": "past-24h"},
-                "max_results": {"type": "integer", "description": "Max opportunities (1-30)", "default": 20},
-                "remote_only": {"type": "boolean", "description": "Filter remote roles only", "default": False},
-                "candidate_profile_id": {"type": "string", "description": "Optional profile ID for ATS matching"},
-                "candidate_skills": {"type": "string", "description": "Comma-separated skills (e.g. 'React.js, Node.js, MongoDB')"},
-                "candidate_exp_years": {"type": "integer", "description": "Candidate total years of experience"},
-                "candidate_name": {"type": "string", "description": "Candidate name"}
+                "job_title": {
+                    "type": "string",
+                    "description": "Target job title"
+                },
+                "company_name": {
+                    "type": "string",
+                    "description": "Target company name",
+                    "default": "Hiring Team"
+                },
+                "matched_skills": {
+                    "type": "string",
+                    "description": "Comma-separated matched skills",
+                    "default": "Python, FastAPI"
+                },
+                "candidate_name": {
+                    "type": "string",
+                    "description": "Candidate full name",
+                    "default": "Candidate"
+                },
+                "candidate_exp_years": {
+                    "type": "integer",
+                    "description": "Candidate years of experience",
+                    "default": 2
+                },
+                "recipient_name": {
+                    "type": "string",
+                    "description": "Recruiter / Hiring Manager name"
+                },
+                "recipient_email": {
+                    "type": "string",
+                    "description": "Recruiter contact email (e.g. 'hr@company.com')"
+                }
             },
-            "required": []
+            "required": ["job_title"]
+        }
+    },
+    {
+        "name": "parse_linkedin_post",
+        "description": "Extract structured hiring data (HR email, phone, skills, role) from a LinkedIn post URL and generate outreach pitches.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "post_url": {
+                    "type": "string",
+                    "description": "Direct LinkedIn /posts/ URL"
+                },
+                "candidate_name": {
+                    "type": "string",
+                    "description": "Candidate full name for sign-off",
+                    "default": "Candidate"
+                },
+                "candidate_exp_years": {
+                    "type": "integer",
+                    "description": "Candidate years of experience",
+                    "default": 2
+                }
+            },
+            "required": ["post_url"]
         }
     },
     {
         "name": "parse_resume",
-        "description": "Parse a PDF resume and extract structured candidate data (skills, experience, roles) without persisting a profile.",
+        "description": "Parse a PDF resume and extract structured candidate data without persisting a profile.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -94,11 +258,29 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Absolute path to the PDF resume."},
-                "location": {"type": "string", "description": "Target location", "default": "India"},
-                "timeframe": {"type": "string", "description": "Freshness filter", "default": "past-24h"},
-                "remote_only": {"type": "boolean", "default": False},
-                "min_match_score": {"type": "integer", "description": "Minimum ATS match score (0-100)", "default": 35}
+                "file_path": {
+                    "type": "string",
+                    "description": "Absolute path to the PDF resume."
+                },
+                "location": {
+                    "type": "string",
+                    "description": "Target location",
+                    "default": "India"
+                },
+                "timeframe": {
+                    "type": "string",
+                    "description": "Freshness filter",
+                    "default": "past-24h"
+                },
+                "remote_only": {
+                    "type": "boolean",
+                    "default": False
+                },
+                "min_match_score": {
+                    "type": "integer",
+                    "description": "Minimum ATS match score (0-100)",
+                    "default": 35
+                }
             },
             "required": ["file_path"]
         }
@@ -109,130 +291,177 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "keywords": {"type": "string", "description": "Role or skill (e.g. 'React Developer')"},
-                "location": {"type": "string", "description": "Location (e.g. 'Bangalore', 'Remote')", "default": "India"},
-                "timeframe": {"type": "string", "description": "Freshness filter", "default": "past-24h"},
-                "remote_only": {"type": "boolean", "default": False},
-                "max_results": {"type": "integer", "default": 20}
+                "keywords": {
+                    "type": "string",
+                    "description": "Role or skill (e.g. 'React Developer')"
+                },
+                "location": {
+                    "type": "string",
+                    "description": "Location (e.g. 'Bangalore', 'Remote')",
+                    "default": "India"
+                },
+                "timeframe": {
+                    "type": "string",
+                    "description": "Freshness filter",
+                    "default": "past-24h"
+                },
+                "remote_only": {
+                    "type": "boolean",
+                    "default": False
+                },
+                "max_results": {
+                    "type": "integer",
+                    "default": 20
+                }
             },
             "required": ["keywords"]
         }
     },
     {
-        "name": "generate_recruiter_pitch",
-        "description": "Generate a personalized recruiter outreach pitch (LinkedIn note + cover email).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "job_title": {"type": "string", "description": "Target job role"},
-                "company_name": {"type": "string", "default": "Hiring Team"},
-                "matched_skills": {"type": "string", "description": "Comma-separated matched skills", "default": "Python, FastAPI"},
-                "candidate_name": {"type": "string", "default": "Candidate"},
-                "candidate_exp_years": {"type": "integer", "default": 2}
-            },
-            "required": ["job_title"]
-        }
-    },
-    {
-        "name": "parse_linkedin_post",
-        "description": "Extract structured hiring data (HR email, phone, skills, role) from a LinkedIn post URL and generate outreach pitches.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "post_url": {"type": "string", "description": "Direct LinkedIn /posts/ URL"},
-                "candidate_name": {"type": "string", "default": "Candidate"},
-                "candidate_exp_years": {"type": "integer", "default": 2}
-            },
-            "required": ["post_url"]
-        }
-    },
-    {
         "name": "search_posts",
-        "description": "Search LinkedIn Posts tab globally by keyword with freshness filters.",
+        "description": "Search LinkedIn Posts tab globally by keyword with freshness filters and horizontal Markdown table output.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "keywords": {"type": "string", "description": "Search keywords (e.g. 'React Developer hiring Bangalore')"},
-                "date_posted": {"type": "string", "description": "Recency: 'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d'", "default": "past-24h"},
-                "max_results": {"type": "integer", "default": 20}
+                "keywords": {
+                    "type": "string",
+                    "description": "Search keywords (e.g. 'React Developer hiring Bangalore')"
+                },
+                "date_posted": {
+                    "type": "string",
+                    "description": "Recency: 'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d'",
+                    "default": "past-24h"
+                },
+                "max_results": {
+                    "type": "integer",
+                    "default": 20
+                }
             },
             "required": ["keywords"]
         }
     }
 ]
 
+# ============================================================================
+# 2. LOCAL IN-PROCESS & REMOTE TOOL HANDLER
+# ============================================================================
 
-# ────────────────────────────────────────────────
-# Tool handlers
-# ────────────────────────────────────────────────
-async def call_api(client: httpx.AsyncClient, method: str, path: str, **kwargs):
-    url = f"{BASE_URL}{path}"
-    resp = await client.request(method, url, timeout=60.0, **kwargs)
-    resp.raise_for_status()
-    return resp.json()
+async def handle_tool(name: str, args: Dict[str, Any]) -> str:
+    """Executes requested tool directly in-process or via remote API."""
+    if REMOTE_URL:
+        # Remote Proxy Mode
+        import httpx
+        async with httpx.AsyncClient() as client:
+            if name == "upload_resume":
+                fp = Path(args["file_path"])
+                with fp.open("rb") as f:
+                    resp = await client.post(f"{REMOTE_URL}/api/upload-resume", files={"file": (fp.name, f, "application/pdf")}, timeout=60.0)
+                return json.dumps(resp.json(), ensure_ascii=False, indent=2)
+
+            elif name == "search_opportunities":
+                params = {k: v for k, v in args.items() if v is not None}
+                resp = await client.get(f"{REMOTE_URL}/api/search-opportunities", params=params, timeout=60.0)
+                return json.dumps(resp.json(), ensure_ascii=False, indent=2)
+
+    # In-Process Direct Execution Mode (Ultra-Fast & Reliable)
+    if name == "search_opportunities":
+        result = await service.search_opportunities_async(
+            query=args.get("query", "Software Engineer"),
+            location=args.get("location", "India"),
+            timeframe=args.get("timeframe", "past-24h"),
+            max_results=args.get("max_results", 20),
+            remote_only=args.get("remote_only", False),
+            candidate_profile_id=args.get("candidate_profile_id"),
+            candidate_skills=args.get("candidate_skills"),
+            candidate_exp_years=args.get("candidate_exp_years"),
+            candidate_name=args.get("candidate_name")
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    elif name == "upload_resume_text":
+        result = service.upload_resume_text(args.get("resume_text", ""))
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    elif name == "upload_resume":
+        fp = Path(args["file_path"])
+        if not fp.exists():
+            return json.dumps({"status": "error", "error": f"File not found: {fp}"}, indent=2)
+        result = service.upload_resume(str(fp), filename=fp.name)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    elif name == "get_candidate_profile":
+        pid = args.get("profile_id") or args.get("candidate_profile_id", "")
+        result = service.get_candidate_profile(pid)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    elif name == "generate_recruiter_pitch":
+        matched = args.get("matched_skills", "Python, FastAPI")
+        matched_list = [s.strip() for s in matched.split(",") if s.strip()] if isinstance(matched, str) else list(matched)
+        result = OutreachPitchGenerator.generate_suite(
+            job_title=args.get("job_title", "Software Engineer"),
+            company_name=args.get("company_name", "Hiring Team"),
+            matched_skills=matched_list,
+            candidate_name=args.get("candidate_name", "Candidate"),
+            candidate_exp_years=int(args.get("candidate_exp_years", 2)),
+            recipient_name=args.get("recipient_name"),
+            recipient_email=args.get("recipient_email")
+        )
+        return json.dumps({"status": "success", "pitches": result}, ensure_ascii=False, indent=2)
+
+    elif name == "parse_linkedin_post":
+        result = service.parse_linkedin_post(
+            url=args.get("post_url", ""),
+            candidate_profile_id=args.get("candidate_profile_id")
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    elif name == "parse_resume":
+        fp = Path(args["file_path"])
+        if not fp.exists():
+            return json.dumps({"status": "error", "error": f"File not found: {fp}"}, indent=2)
+        result = resume_parser.parse(str(fp))
+        return json.dumps({"status": "success", "profile": result}, ensure_ascii=False, indent=2)
+
+    elif name == "search_jobs_by_resume":
+        fp = Path(args["file_path"])
+        if not fp.exists():
+            return json.dumps({"status": "error", "error": f"File not found: {fp}"}, indent=2)
+        profile = resume_parser.parse(str(fp))
+        top_skills = profile.get("top_skills", [])
+        primary_role = profile.get("primary_role", "Software Engineer")
+        search_kw = f"{top_skills[0]} {top_skills[1]}" if len(top_skills) >= 2 else primary_role
+
+        posts = linkedin_finder.search_hiring_posts(
+            keywords=search_kw,
+            location=args.get("location", "India"),
+            timeframe=args.get("timeframe", "past-24h"),
+            remote_only=args.get("remote_only", False),
+            max_results=20
+        )
+        from core.matcher import JobMatcher
+        ranked = JobMatcher.rank_and_score_posts(profile, posts, min_score=args.get("min_match_score", 30))
+        return json.dumps({"status": "success", "candidate_profile": profile, "total_matches": len(ranked), "jobs": ranked}, ensure_ascii=False, indent=2)
+
+    elif name in ["search_linkedin_hiring", "search_posts"]:
+        kw = args.get("keywords") or args.get("query", "Software Engineer")
+        dt = args.get("date_posted") or args.get("timeframe", "past-24h")
+        posts = linkedin_finder.search_posts(
+            keywords=kw,
+            date_posted=dt,
+            max_results=args.get("max_results", 20)
+        )
+        table = LinkedInFinder.format_as_markdown_table(posts)
+        return json.dumps({"status": "success", "count": len(posts), "markdown_table": table, "posts": posts}, ensure_ascii=False, indent=2)
+
+    else:
+        raise ValueError(f"Unknown tool: {name}")
 
 
-async def handle_tool(name: str, args: dict) -> str:
-    async with httpx.AsyncClient() as client:
-        if name == "upload_resume":
-            fp = Path(args["file_path"])
-            with fp.open("rb") as f:
-                result = await call_api(client, "POST", "/api/upload-resume",
-                                        files={"file": (fp.name, f, "application/pdf")})
-            return json.dumps(result, ensure_ascii=False, indent=2)
+# ============================================================================
+# 3. ROBUST CROSS-PLATFORM MCP STDIO SERVER LOOP
+# ============================================================================
 
-        elif name == "get_candidate_profile":
-            result = await call_api(client, "GET", f"/api/candidate-profile/{args['profile_id']}")
-            return json.dumps(result, ensure_ascii=False, indent=2)
-
-        elif name == "search_opportunities":
-            params = {k: v for k, v in args.items() if v is not None}
-            result = await call_api(client, "GET", "/api/search-opportunities", params=params)
-            return json.dumps(result, ensure_ascii=False, indent=2)
-
-        elif name == "parse_resume":
-            fp = Path(args["file_path"])
-            with fp.open("rb") as f:
-                result = await call_api(client, "POST", "/api/parse-resume",
-                                        files={"file": (fp.name, f, "application/pdf")})
-            return json.dumps(result, ensure_ascii=False, indent=2)
-
-        elif name == "search_jobs_by_resume":
-            fp = Path(args["file_path"])
-            extra = {k: v for k, v in args.items() if k != "file_path"}
-            with fp.open("rb") as f:
-                result = await call_api(client, "POST", "/api/search-jobs-by-resume",
-                                        files={"file": (fp.name, f, "application/pdf")},
-                                        data=extra)
-            return json.dumps(result, ensure_ascii=False, indent=2)
-
-        elif name == "search_linkedin_hiring":
-            params = {k: v for k, v in args.items() if v is not None}
-            result = await call_api(client, "GET", "/api/search-hiring-posts", params=params)
-            return json.dumps(result, ensure_ascii=False, indent=2)
-
-        elif name == "generate_recruiter_pitch":
-            result = await call_api(client, "POST", "/api/generate-pitch", data=args)
-            return json.dumps(result, ensure_ascii=False, indent=2)
-
-        elif name == "parse_linkedin_post":
-            params = {k: v for k, v in args.items() if v is not None}
-            result = await call_api(client, "GET", "/api/parse-post", params=params)
-            return json.dumps(result, ensure_ascii=False, indent=2)
-
-        elif name == "search_posts":
-            params = {k: v for k, v in args.items() if v is not None}
-            result = await call_api(client, "GET", "/api/search-posts", params=params)
-            return json.dumps(result, ensure_ascii=False, indent=2)
-
-        else:
-            raise ValueError(f"Unknown tool: {name}")
-
-
-# ────────────────────────────────────────────────
-# Robust Cross-Platform MCP stdio loop
-# ────────────────────────────────────────────────
-def send_response(obj: dict):
+def send_response(obj: Dict[str, Any]):
     line = json.dumps(obj, ensure_ascii=False) + "\n"
     sys.stdout.write(line)
     sys.stdout.flush()
@@ -267,6 +496,10 @@ async def main():
                 }
             })
 
+        # ── ping ──
+        elif method == "ping":
+            send_response({"jsonrpc": "2.0", "id": req_id, "result": {}})
+
         # ── tools/list ──
         elif method == "tools/list":
             send_response({
@@ -299,11 +532,11 @@ async def main():
                     }
                 })
 
-        # ── notifications (no response needed) ──
+        # ── notifications ──
         elif method and method.startswith("notifications/"):
             pass
 
-        # ── unknown ──
+        # ── unknown method fallback ──
         elif req_id is not None:
             send_response({
                 "jsonrpc": "2.0",

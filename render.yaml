@@ -1,12 +1,36 @@
+# ============================================================================
+# OpenFinder Infrastructure as Code (Render Blueprint)
+# Multi-Protocol FastAPI, Claude Web Connectors, and ChatGPT Actions
+# ============================================================================
+
 services:
   - type: web
     name: openfinder
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn api_server:app --host 0.0.0.0 --port $PORT
+    region: oregon
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: uvicorn api_server:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /health
+    autoDeploy: true
+
+    # Environment variables
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.8
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: PYTHONIOENCODING
+        value: "utf-8"
+      - key: OPENFINDER_ENV
+        value: "production"
+      - key: OPENFINDER_PUBLIC_URL
+        value: "https://openfinder.onrender.com"
+      - key: OPENFINDER_CONCURRENCY
+        value: "5"
+
+      # Optional direct LinkedIn session secrets (Set in Render Dashboard)
+      - key: LINKEDIN_LI_AT
+        sync: false
+      - key: LINKEDIN_JSESSIONID
+        sync: false

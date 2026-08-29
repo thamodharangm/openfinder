@@ -1,57 +1,165 @@
-import re
-from typing import Dict, List, Any, Optional, Tuple
-from difflib import SequenceMatcher
+"""
+core/matcher.py
+===============
+Production-grade Multi-Dimensional Candidate-Job Matching & ATS Resume Scoring Engine.
+
+Features:
+- Deep 6-Factor weighted scoring: Tech Stack (35%), Experience (20%), Role (15%), Domain (15%), Location (10%), Education (5%).
+- Constant-time O(1) canonical skill normalization across 70+ technology ecosystems.
+- Semantic skill proximity graph: Grants partial credit for related stacks (e.g. FastAPI <-> Django/Python, Next.js <-> React).
+- Domain & industry taxonomy inference (FinTech, SaaS, Healthcare, AI/ML, EdTech, E-Commerce, etc.).
+- Actionable ATS resume tailoring recommendations and candidate fit grading.
+"""
+
 from collections import defaultdict
+from difflib import SequenceMatcher
+import logging
+import re
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
+
+logger = logging.getLogger(__name__)
+
+# ============================================================================
+# 1. CANONICAL SKILL TAXONOMY (O(1) Constant-Time Lookup)
+# ============================================================================
+
+_RAW_SKILL_ALIASES: Dict[str, List[str]] = {
+    # Frontend
+    "react": ["react", "react.js", "reactjs", "react js"],
+    "react native": ["react native", "reactnative", "rn"],
+    "next.js": ["next", "next.js", "nextjs", "next js"],
+    "vue.js": ["vue", "vue.js", "vuejs", "vue 3", "nuxt", "nuxtjs"],
+    "angular": ["angular", "angular.js", "angularjs", "angular 2+"],
+    "javascript": ["javascript", "js", "es6", "es6+", "ecmascript"],
+    "typescript": ["typescript", "ts"],
+    "tailwind css": ["tailwind", "tailwindcss", "tailwind css", "tailwind-css"],
+    "html/css": ["html", "html5", "css", "css3", "sass", "scss", "less"],
+    "redux": ["redux", "redux toolkit", "rtk", "zustand", "mobx"],
+
+    # Backend & Frameworks
+    "python": ["python", "py", "python3", "python 3"],
+    "fastapi": ["fastapi", "fast api", "fast-api"],
+    "django": ["django", "django rest framework", "drf"],
+    "flask": ["flask", "flask api"],
+    "node.js": ["node", "node.js", "nodejs", "node js"],
+    "express.js": ["express", "express.js", "expressjs"],
+    "nestjs": ["nest", "nestjs", "nest.js"],
+    "java": ["java", "j2ee", "core java", "java 8", "java 11", "java 17", "java 21"],
+    "spring boot": ["spring", "spring boot", "springboot", "spring mvc"],
+    "golang": ["go", "golang", "gin", "gorm"],
+    "rust": ["rust", "actix", "tokio"],
+    "c#": ["c#", "csharp", "c sharp"],
+    ".net": [".net", "dotnet", ".net core", "asp.net", "asp.net core"],
+    "c++": ["c++", "cpp", "c/c++"],
+    "php": ["php", "laravel", "symfony", "codeigniter"],
+    "ruby": ["ruby", "ruby on rails", "rails"],
+
+    # APIs & Microservices
+    "rest api": ["rest", "rest api", "restful", "restful apis", "rest apis", "web apis"],
+    "graphql": ["graphql", "graph ql", "apollo"],
+    "grpc": ["grpc", "protobuf", "protocol buffers"],
+    "microservices": ["microservices", "microservice architecture", "distributed systems"],
+    "websockets": ["websocket", "websockets", "socket.io"],
+
+    # Databases & Caching
+    "sql": ["sql", "rdbms", "relational database"],
+    "postgresql": ["postgres", "postgresql", "psql"],
+    "mysql": ["mysql", "mariadb"],
+    "mongodb": ["mongo", "mongodb", "nosql"],
+    "redis": ["redis", "in-memory cache", "memcached"],
+    "elasticsearch": ["elasticsearch", "elastic search", "opensearch"],
+    "dynamodb": ["dynamodb", "dynamo db"],
+    "cassandra": ["cassandra", "scylladb"],
+
+    # Cloud & DevOps
+    "aws": ["aws", "amazon web services", "ec2", "s3", "lambda", "ecs", "eks"],
+    "gcp": ["gcp", "google cloud", "google cloud platform"],
+    "azure": ["azure", "microsoft azure"],
+    "docker": ["docker", "containerization", "containers"],
+    "kubernetes": ["kubernetes", "k8s", "helm"],
+    "terraform": ["terraform", "iac", "infrastructure as code"],
+    "ci/cd": ["ci/cd", "cicd", "github actions", "gitlab ci", "jenkins"],
+    "linux": ["linux", "unix", "bash", "shell scripting"],
+
+    # Messaging & Streaming
+    "kafka": ["kafka", "apache kafka"],
+    "rabbitmq": ["rabbitmq", "rabbit mq"],
+    "celery": ["celery", "task queue"],
+
+    # AI, ML & Data Science
+    "ai/ml": ["ai", "ml", "machine learning", "deep learning", "artificial intelligence"],
+    "llm": ["llm", "large language models", "generative ai", "genai", "gpt", "openai", "rag"],
+    "langchain": ["langchain", "llamaindex", "vector db", "chromadb", "pinecone", "qdrant"],
+    "pytorch": ["pytorch", "torch"],
+    "tensorflow": ["tensorflow", "keras"],
+    "data science": ["data science", "pandas", "numpy", "scikit-learn", "data analysis"],
+    "data engineering": ["data engineer", "spark", "hadoop", "snowflake", "databricks", "dbt"],
+
+    # Mobile
+    "flutter": ["flutter", "dart"],
+    "android": ["android", "kotlin", "java android"],
+    "ios": ["ios", "swift", "swiftui", "objective-c"],
+
+    # QA & Testing
+    "unit testing": ["unit test", "unit testing", "pytest", "jest", "junit", "mocha"],
+    "automation testing": ["selenium", "cypress", "playwright", "test automation", "sdet", "qa automation"],
+}
+
+# Pre-flatten lookup for O(1) canonical skill translation
+_CANONICAL_LOOKUP: Dict[str, str] = {}
+for canonical, variants in _RAW_SKILL_ALIASES.items():
+    _CANONICAL_LOOKUP[canonical.lower()] = canonical
+    for v in variants:
+        _CANONICAL_LOOKUP[v.lower().strip()] = canonical
 
 
-def canonicalize_skill(s: str) -> str:
-    """Normalize skill strings for consistent comparison."""
-    sl = s.lower().strip()
-    # Common aliases
-    aliases = {
-        "react": ["react", "react.js", "reactjs"],
-        "node": ["node", "node.js", "nodejs"],
-        "express": ["express", "express.js", "expressjs"],
-        "mongodb": ["mongo", "mongodb"],
-        "react native": ["react native", "reactnative"],
-        "next.js": ["next", "next.js", "nextjs"],
-        "javascript": ["js", "javascript", "es6", "es6+"],
-        "tailwind css": ["tailwind", "tailwindcss", "tailwind css"],
-        "rest api": ["rest", "rest api", "restful", "restful apis"],
-        "typescript": ["ts", "typescript"],
-        "postgresql": ["postgres", "postgresql", "psql"],
-        "aws": ["aws", "amazon web services"],
-        "gcp": ["gcp", "google cloud"],
-        "azure": ["azure", "microsoft azure"],
-        "docker": ["docker", "containerization"],
-        "kubernetes": ["kubernetes", "k8s"],
-        "python": ["python", "py"],
-        "django": ["django", "django rest framework"],
-        "flask": ["flask", "flask api"],
-        "sql": ["sql", "mysql", "sql server", "postgresql"],
-    }
-    for canonical, variants in aliases.items():
-        if sl in variants:
-            return canonical
-    return sl
+def canonicalize_skill(skill_str: str) -> str:
+    """Normalizes skill string to canonical form in O(1) constant time."""
+    if not skill_str or not isinstance(skill_str, str):
+        return ""
+    clean = skill_str.lower().strip()
+    return _CANONICAL_LOOKUP.get(clean, clean)
 
+
+# Semantic Proximity Matrix: Related skills yield partial credit (0.6 - 0.8)
+_SKILL_PROXIMITY_GRAPH: Dict[str, Dict[str, float]] = {
+    "fastapi": {"python": 0.85, "django": 0.75, "flask": 0.80, "rest api": 0.70},
+    "django": {"python": 0.85, "fastapi": 0.75, "flask": 0.75, "rest api": 0.70},
+    "flask": {"python": 0.85, "fastapi": 0.80, "django": 0.75, "rest api": 0.70},
+    "next.js": {"react": 0.90, "typescript": 0.75, "javascript": 0.70},
+    "react": {"next.js": 0.85, "redux": 0.75, "javascript": 0.80, "typescript": 0.75},
+    "vue.js": {"javascript": 0.80, "typescript": 0.70, "html/css": 0.70},
+    "angular": {"typescript": 0.85, "javascript": 0.75},
+    "spring boot": {"java": 0.90, "microservices": 0.80, "rest api": 0.70},
+    "docker": {"kubernetes": 0.80, "ci/cd": 0.70, "linux": 0.70},
+    "kubernetes": {"docker": 0.85, "terraform": 0.75, "aws": 0.75},
+    "aws": {"docker": 0.70, "kubernetes": 0.75, "terraform": 0.80, "gcp": 0.75, "azure": 0.75},
+    "postgresql": {"sql": 0.85, "mysql": 0.80},
+    "mysql": {"sql": 0.85, "postgresql": 0.80},
+    "mongodb": {"sql": 0.60, "redis": 0.65},
+    "langchain": {"llm": 0.85, "python": 0.75, "ai/ml": 0.80},
+    "flutter": {"dart": 0.90, "react native": 0.75, "mobile": 0.80},
+    "react native": {"flutter": 0.75, "react": 0.85, "javascript": 0.75},
+}
+
+
+# ============================================================================
+# 2. JOB MATCHER ENGINE
+# ============================================================================
 
 class JobMatcher:
     """
-    Deep Multi-Dimensional Match Engine.
+    Enterprise-Grade Multi-Dimensional Match & ATS Resume Scoring Engine.
     
     Evaluates:
-      1. Technical Stack Overlap (35%) - exact + semantic similarity
-      2. Experience & Seniority Fit (20%)
-      3. Role & Title Alignment (15%)
-      4. Domain / Industry Relevance (15%)
-      5. Location & Remote Preferences (10%)
-      6. Education & Certifications (5%)
-    
-    Provides actionable ATS resume tailoring recommendations.
+      1. Technical Stack Overlap (35%) - Exact match + semantic proximity graph
+      2. Experience & Seniority Fit (20%) - Asymmetric tolerance curve
+      3. Role & Title Alignment (15%) - Normalized title variants & token overlap
+      4. Domain / Industry Relevance (15%) - Taxonomy inference
+      5. Location & Remote Preferences (10%) - City/Regional/WFH alignment
+      6. Education & Certifications (5%) - Degree compatibility
     """
 
-    # Configurable weights (sum to 1.00)
     WEIGHTS = {
         "tech_stack": 0.35,
         "experience": 0.20,
@@ -61,31 +169,33 @@ class JobMatcher:
         "education": 0.05,
     }
 
-    # Domain keyword mapping for industry inference
     DOMAIN_KEYWORDS = {
-        "fintech": ["payment", "banking", "finance", "trading", "crypto", "blockchain"],
-        "healthcare": ["health", "medical", "patient", "clinical", "hipaa", "emr"],
-        "ecommerce": ["ecommerce", "retail", "cart", "checkout", "shopify", "marketplace"],
-        "edtech": ["education", "learning", "student", "course", "lms"],
-        "saas": ["saas", "subscription", "b2b", "enterprise software"],
-        "ai/ml": ["machine learning", "deep learning", "nlp", "computer vision", "data science", "ai"],
-        "iot": ["iot", "embedded", "sensors", "hardware"],
-        "cybersecurity": ["security", "infosec", "penetration testing", "soc", "compliance"],
-        "cloud": ["aws", "azure", "gcp", "cloud", "serverless"],
-        "mobile": ["android", "ios", "mobile", "flutter", "react native"],
+        "fintech": ["payment", "banking", "finance", "trading", "crypto", "blockchain", "lending", "wallet", "upi"],
+        "healthcare": ["health", "medical", "patient", "clinical", "hipaa", "emr", "telehealth", "pharma"],
+        "ecommerce": ["ecommerce", "retail", "cart", "checkout", "shopify", "marketplace", "d2c", "orders"],
+        "edtech": ["education", "learning", "student", "course", "lms", "classroom", "tutor"],
+        "saas": ["saas", "subscription", "b2b", "enterprise software", "multi-tenant", "crm", "erp"],
+        "ai/ml": ["machine learning", "deep learning", "nlp", "computer vision", "data science", "ai", "llm", "genai", "rag"],
+        "iot": ["iot", "embedded", "sensors", "hardware", "firmware"],
+        "cybersecurity": ["security", "infosec", "penetration testing", "soc", "compliance", "iam", "vulnerability"],
+        "cloud/devops": ["aws", "azure", "gcp", "cloud", "serverless", "devops", "sre", "infrastructure"],
+        "mobile": ["android", "ios", "mobile", "flutter", "react native", "swift", "kotlin"],
     }
 
     @staticmethod
     def _fuzzy_skill_match(skill_a: str, skill_b: str, threshold: float = 0.85) -> bool:
-        """Check if two canonical skills are fuzzy similar."""
+        """Checks if two canonical skill names are typographical fuzzy matches."""
+        if not skill_a or not skill_b:
+            return False
         if skill_a == skill_b:
             return True
-        similarity = SequenceMatcher(None, skill_a, skill_b).ratio()
-        return similarity >= threshold
+        return SequenceMatcher(None, skill_a, skill_b).ratio() >= threshold
 
     @classmethod
     def _infer_domains(cls, text: str) -> List[str]:
-        """Infer potential domains from a text blob."""
+        """Infers industry domains from raw job text."""
+        if not text:
+            return []
         text_lower = text.lower()
         domains = []
         for domain, keywords in cls.DOMAIN_KEYWORDS.items():
@@ -95,30 +205,44 @@ class JobMatcher:
 
     @staticmethod
     def _extract_required_experience(exp_str: str) -> Tuple[Optional[int], Optional[int]]:
-        """Extract min and max years from string like '3-5 years' or '5+ years'."""
+        """Extracts min and max experience years from strings like '3-5 years', '4+ yrs', 'freshers'."""
         if not exp_str:
             return None, None
-        exp_str_lower = exp_str.lower()
-        # Pattern for range "X-Y years"
-        match_range = re.search(r'(\d+)\s*[-–]\s*(\d+)\s*years?', exp_str_lower)
+
+        exp_lower = exp_str.lower()
+        if any(w in exp_lower for w in ["fresher", "0-", "0 to 1", "0 year", "freshers", "intern", "entry level"]):
+            return 0, 1
+        if "junior" in exp_lower:
+            return 0, 2
+        if "lead" in exp_lower or "principal" in exp_lower:
+            return 7, 12
+        if "senior" in exp_lower or "sr." in exp_lower:
+            return 4, 8
+
+        # Range 'X-Y years' or 'X to Y years'
+        match_range = re.search(r'(\d+)\s*(?:-|–|to)\s*(\d+)\s*(?:yrs?|years?)?', exp_lower)
         if match_range:
             return int(match_range.group(1)), int(match_range.group(2))
-        # Pattern for "X+ years"
-        match_plus = re.search(r'(\d+)\s*\+\s*years?', exp_str_lower)
+
+        # 'X+ years'
+        match_plus = re.search(r'(\d+)\s*\+\s*(?:yrs?|years?)?', exp_lower)
         if match_plus:
-            return int(match_plus.group(1)), None
-        # Pattern for "at least X years"
-        match_at_least = re.search(r'at least\s+(\d+)\s+years?', exp_str_lower)
-        if match_at_least:
-            return int(match_at_least.group(1)), None
-        # Pattern for "X years"
-        match_single = re.search(r'(\d+)\s*years?', exp_str_lower)
-        if match_single:
-            return int(match_single.group(1)), int(match_single.group(1))
-        # Fallback single digit search
-        match_any = re.search(r'(\d+)', exp_str_lower)
-        if match_any:
-            return int(match_any.group(1)), None
+            low = int(match_plus.group(1))
+            return low, low + 3
+
+        # 'At least X years' or 'Min X years'
+        match_min = re.search(r'(?:at\s+least|min(?:imum)?)\s+(\d+)\s*(?:yrs?|years?)?', exp_lower)
+        if match_min:
+            low = int(match_min.group(1))
+            return low, low + 2
+
+        # Standalone digits
+        numbers = [int(n) for n in re.findall(r'\b\d+\b', exp_lower)]
+        if len(numbers) >= 2:
+            return min(numbers[0], numbers[1]), max(numbers[0], numbers[1])
+        elif len(numbers) == 1:
+            return numbers[0], numbers[0] + 2
+
         return None, None
 
     @classmethod
@@ -128,20 +252,34 @@ class JobMatcher:
         job_post: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Compute deep match score using candidate profile and job posting details.
+        Computes an exhaustive, multi-factor match evaluation between candidate and job posting.
         """
-        # Extract candidate info
+        # 1. Candidate Profile Extraction
         cand_skills_raw = candidate_profile.get("skills") or candidate_profile.get("top_skills", [])
         cand_exp_years = candidate_profile.get("years_of_experience") or candidate_profile.get("experience_years", 0)
-        cand_roles = candidate_profile.get("target_roles") or candidate_profile.get("desired_roles") or [candidate_profile.get("primary_role", "")]
+        if isinstance(cand_exp_years, str):
+            try:
+                cand_exp_years = int(re.search(r'\d+', cand_exp_years).group(0))
+            except Exception:
+                cand_exp_years = 0
+
+        cand_roles = (
+            candidate_profile.get("target_roles")
+            or candidate_profile.get("desired_roles")
+            or [candidate_profile.get("primary_role", "")]
+        )
         cand_domains = candidate_profile.get("desired_domains", [])
         cand_locations = candidate_profile.get("preferred_locations", [])
         cand_remote_pref = str(candidate_profile.get("remote_preference", "any")).lower()
         cand_education = candidate_profile.get("education", {})
         cand_degree = cand_education.get("degree", "") if isinstance(cand_education, dict) else str(cand_education)
 
-        # Extract job info
-        req_skills_raw = job_post.get("required_skills") or job_post.get("skills") or job_post.get("detected_skills", [])
+        # 2. Job Posting Details Extraction
+        req_skills_raw = (
+            job_post.get("required_skills")
+            or job_post.get("skills")
+            or job_post.get("detected_skills", [])
+        )
         exp_req_str = job_post.get("experience_required") or job_post.get("full_post_content", "")
         job_title = job_post.get("title") or job_post.get("role") or ""
         job_description = job_post.get("description") or job_post.get("full_post_content") or ""
@@ -149,132 +287,145 @@ class JobMatcher:
         if not job_domains:
             job_domains = cls._infer_domains(job_description)
         job_location = job_post.get("location", "")
-        job_remote = job_post.get("remote", False) or ("remote" in job_location.lower())
+        job_remote = job_post.get("remote", False) or ("remote" in str(job_location).lower())
         job_edu_req = str(job_post.get("education_required", "")).lower()
 
-        # Canonicalize skills
+        # 3. Canonicalize Skills in O(1)
         cand_skills_canon = [canonicalize_skill(s) for s in cand_skills_raw if s]
         req_skills_canon = [canonicalize_skill(s) for s in req_skills_raw if s]
 
-        # -------------------------------
-        # 1. Technical Stack Overlap (35%)
-        # -------------------------------
-        if req_skills_canon:
-            exact_matches = set(cand_skills_canon) & set(req_skills_canon)
-            missing_exact = set(req_skills_canon) - set(cand_skills_canon)
-            
-            fuzzy_matched_req = set()
-            for req_skill in missing_exact:
-                for cand_skill in set(cand_skills_canon) - exact_matches:
-                    if cls._fuzzy_skill_match(req_skill, cand_skill):
-                        fuzzy_matched_req.add(req_skill)
-                        break
-            
-            total_effective = len(exact_matches) + len(fuzzy_matched_req)
-            tech_score = (total_effective / len(req_skills_canon)) * 100
-            matched_skills = set(req_skills_canon) - (missing_exact - fuzzy_matched_req)
-            missing_skills = set(req_skills_canon) - matched_skills
-        else:
-            tech_score = 70
-            matched_skills = set(cand_skills_canon[:3])
-            missing_skills = set()
+        # -------------------------------------------------------------
+        # Factor 1: Technical Stack Overlap (35%)
+        # -------------------------------------------------------------
+        matched_skills_set: Set[str] = set()
+        missing_skills_set: Set[str] = set()
+        tech_score = 70.0
 
-        # -------------------------------
-        # 2. Experience & Seniority Fit (20%)
-        # -------------------------------
+        if req_skills_canon:
+            cand_set = set(cand_skills_canon)
+            req_set = set(req_skills_canon)
+
+            exact_matches = cand_set.intersection(req_set)
+            matched_skills_set.update(exact_matches)
+            unmatched_req = req_set - exact_matches
+
+            total_credit = float(len(exact_matches))
+
+            for req_skill in unmatched_req:
+                matched = False
+                # A. Check Semantic Proximity Graph
+                prox_map = _SKILL_PROXIMITY_GRAPH.get(req_skill, {})
+                for cand_skill in cand_set:
+                    if cand_skill in prox_map:
+                        credit = prox_map[cand_skill]
+                        total_credit += credit
+                        matched_skills_set.add(req_skill)
+                        matched = True
+                        break
+
+                # B. Check Fuzzy Typographical Match
+                if not matched:
+                    for cand_skill in cand_set:
+                        if cls._fuzzy_skill_match(req_skill, cand_skill):
+                            total_credit += 0.90
+                            matched_skills_set.add(req_skill)
+                            matched = True
+                            break
+
+                if not matched:
+                    missing_skills_set.add(req_skill)
+
+            tech_score = (total_credit / len(req_set)) * 100.0
+            tech_score = max(0.0, min(100.0, tech_score))
+        else:
+            matched_skills_set.update(cand_skills_canon[:4])
+
+        # -------------------------------------------------------------
+        # Factor 2: Experience & Seniority Fit (20%)
+        # -------------------------------------------------------------
         min_exp, max_exp = cls._extract_required_experience(exp_req_str)
         if min_exp is None:
-            exp_score = 80
+            exp_score = 80.0
         else:
             if max_exp is None:
                 if cand_exp_years >= min_exp:
-                    exp_score = 100
+                    exp_score = 100.0
                 else:
                     diff = min_exp - cand_exp_years
-                    exp_score = max(20, 100 - diff * 25)
+                    exp_score = max(20.0, 100.0 - (diff * 25.0))
             else:
                 if min_exp <= cand_exp_years <= max_exp:
-                    exp_score = 100
+                    exp_score = 100.0
                 elif cand_exp_years < min_exp:
                     diff = min_exp - cand_exp_years
-                    exp_score = max(20, 100 - diff * 30)
+                    exp_score = max(20.0, 100.0 - (diff * 25.0))
                 else:
                     diff = cand_exp_years - max_exp
-                    exp_score = max(50, 100 - diff * 15)
+                    exp_score = max(55.0, 100.0 - (diff * 12.0))
 
-        # -------------------------------
-        # 3. Role & Title Alignment (15%)
-        # -------------------------------
-        role_score = 0
+        # -------------------------------------------------------------
+        # Factor 3: Role & Title Alignment (15%)
+        # -------------------------------------------------------------
+        role_score = 60.0
         if cand_roles and job_title:
             job_title_lower = job_title.lower()
-            cand_roles_lower = [r.lower() for r in cand_roles if r]
+            cand_roles_lower = [r.lower().strip() for r in cand_roles if r]
             for role in cand_roles_lower:
-                if role in job_title_lower or job_title_lower in role:
-                    role_score = 100
+                if role == job_title_lower or role in job_title_lower or job_title_lower in role:
+                    role_score = 100.0
                     break
-                job_tokens = set(re.findall(r'\w+', job_title_lower))
-                role_tokens = set(re.findall(r'\w+', role))
-                if job_tokens & role_tokens:
-                    role_score = max(role_score, 70)
-            if role_score == 0 and cand_roles_lower:
-                best_sim = max(
-                    SequenceMatcher(None, job_title_lower, role).ratio()
-                    for role in cand_roles_lower
-                )
-                role_score = best_sim * 100
-        else:
-            role_score = 60
+                job_tokens = set(re.findall(r'\w+', job_title_lower)) - {"developer", "engineer", "lead", "senior", "junior"}
+                role_tokens = set(re.findall(r'\w+', role)) - {"developer", "engineer", "lead", "senior", "junior"}
+                if job_tokens and role_tokens and (job_tokens & role_tokens):
+                    role_score = max(role_score, 85.0)
+            if role_score == 60.0 and cand_roles_lower:
+                best_sim = max(SequenceMatcher(None, job_title_lower, r).ratio() for r in cand_roles_lower)
+                role_score = max(role_score, best_sim * 100.0)
 
-        # -------------------------------
-        # 4. Domain / Industry Relevance (15%)
-        # -------------------------------
+        # -------------------------------------------------------------
+        # Factor 4: Domain / Industry Relevance (15%)
+        # -------------------------------------------------------------
+        domain_score = 50.0
         if job_domains and cand_domains:
-            overlap = set(job_domains) & set(cand_domains)
-            domain_score = 100 if overlap else 30
-        else:
-            domain_score = 50
+            overlap = set(job_domains).intersection(set(cand_domains))
+            domain_score = 100.0 if overlap else 35.0
 
-        # -------------------------------
-        # 5. Location & Remote Preferences (10%)
-        # -------------------------------
-        location_score = 50
-        if job_remote is True:
-            if cand_remote_pref in ["remote", "any"]:
-                location_score = 100
-            else:
-                location_score = 40
+        # -------------------------------------------------------------
+        # Factor 5: Location & Remote Preferences (10%)
+        # -------------------------------------------------------------
+        location_score = 50.0
+        if job_remote:
+            location_score = 100.0 if cand_remote_pref in ["remote", "any"] else 50.0
         elif job_location:
             if cand_locations:
-                job_loc_lower = job_location.lower()
+                job_loc_lower = str(job_location).lower()
                 for loc in cand_locations:
                     if loc.lower() in job_loc_lower or job_loc_lower in loc.lower():
-                        location_score = 100
+                        location_score = 100.0
                         break
                 else:
-                    location_score = 40
+                    location_score = 40.0
             else:
-                location_score = 60
+                location_score = 65.0
 
-        # -------------------------------
-        # 6. Education & Certifications (5%)
-        # -------------------------------
-        edu_score = 50
+        # -------------------------------------------------------------
+        # Factor 6: Education & Certifications (5%)
+        # -------------------------------------------------------------
+        edu_score = 60.0
         if job_edu_req and cand_degree:
-            if any(deg in job_edu_req for deg in ["bachelor", "btech", "be", "bs"]) and any(deg in cand_degree.lower() for deg in ["bachelor", "btech", "be", "bs"]):
-                edu_score = 100
-            elif any(deg in job_edu_req for deg in ["master", "mtech", "ms"]) and any(deg in cand_degree.lower() for deg in ["master", "mtech", "ms"]):
-                edu_score = 100
+            cand_deg_lower = cand_degree.lower()
+            if any(d in job_edu_req for d in ["bachelor", "btech", "be", "bs"]) and any(d in cand_deg_lower for d in ["bachelor", "btech", "be", "bs"]):
+                edu_score = 100.0
+            elif any(d in job_edu_req for d in ["master", "mtech", "ms"]) and any(d in cand_deg_lower for d in ["master", "mtech", "ms"]):
+                edu_score = 100.0
             elif "or equivalent" in job_edu_req or "experience" in job_edu_req:
-                edu_score = 80
+                edu_score = 85.0
             else:
-                edu_score = 40
-        else:
-            edu_score = 60
+                edu_score = 45.0
 
-        # -------------------------------
-        # Weighted Final Score
-        # -------------------------------
+        # -------------------------------------------------------------
+        # Weighted Overall Score Computation
+        # -------------------------------------------------------------
         final_score = (
             tech_score * cls.WEIGHTS["tech_stack"] +
             exp_score * cls.WEIGHTS["experience"] +
@@ -283,9 +434,9 @@ class JobMatcher:
             location_score * cls.WEIGHTS["location"] +
             edu_score * cls.WEIGHTS["education"]
         )
-        final_score = int(max(10, min(final_score, 100)))
+        final_score = int(max(10, min(round(final_score), 100)))
 
-        # Grading
+        # Candidate Fit Grade
         if final_score >= 85:
             grade = "🌟 Top Match (High Interview Probability)"
         elif final_score >= 70:
@@ -295,27 +446,25 @@ class JobMatcher:
         else:
             grade = "❌ Low Match"
 
-        # ATS Tailoring Recommendations
-        tailoring_advice = []
-        if missing_skills:
-            missing_title = [s.title() for s in list(missing_skills)[:5]]
-            tailoring_advice.append(f"Highlight any familiarity or mini-projects with: {', '.join(missing_title)}.")
-        if min_exp and cand_exp_years < min_exp:
-            tailoring_advice.append(f"Emphasize high-impact project results to bridge the {min_exp}+ yrs requirement.")
-        elif max_exp and cand_exp_years > max_exp:
-            tailoring_advice.append("Consider downplaying years to avoid overqualification perception.")
-        if role_score < 70 and job_title:
-            tailoring_advice.append(f"Tailor your resume title/headline to align with '{job_title}'.")
-        if domain_score < 50:
-            tailoring_advice.append("Add relevant domain-specific projects or keywords from the job description.")
-        if location_score < 50:
-            tailoring_advice.append("Address location preference in cover letter or mention willingness to relocate/remote.")
+        # Actionable ATS Tailoring Recommendations
+        tailoring_advice: List[str] = []
+        if missing_skills_set:
+            missing_title = [s.title() for s in sorted(list(missing_skills_set))[:5]]
+            tailoring_advice.append(f"Highlight any familiarity or project impact with: {', '.join(missing_title)}.")
+        if min_exp is not None and cand_exp_years < min_exp:
+            tailoring_advice.append(f"Emphasize high-complexity projects to bridge the {min_exp}+ yrs seniority expectation.")
+        elif max_exp is not None and cand_exp_years > max_exp:
+            tailoring_advice.append("Frame experience around hands-on execution to avoid overqualification perception.")
+        if role_score < 75.0 and job_title:
+            tailoring_advice.append(f"Align resume headline with target role '{job_title}'.")
+        if domain_score < 50.0 and job_domains:
+            tailoring_advice.append(f"Incorporate domain terminology for {', '.join(job_domains)} in project descriptions.")
 
         return {
             "match_score": final_score,
             "match_grade": grade,
-            "matched_skills": [s.title() for s in matched_skills],
-            "missing_skills": [s.title() for s in missing_skills],
+            "matched_skills": [s.title() for s in sorted(list(matched_skills_set))],
+            "missing_skills": [s.title() for s in sorted(list(missing_skills_set))],
             "tech_score": round(tech_score, 1),
             "exp_score": round(exp_score, 1),
             "role_score": round(role_score, 1),
@@ -334,12 +483,12 @@ class JobMatcher:
         experience_required_str: str
     ) -> Dict[str, Any]:
         """
-        Legacy adapter for existing OpportunityRanker callers.
-        Uses calculate_deep_match under the hood.
+        Adapter for OpportunityRanker callers.
+        Delegates directly to calculate_deep_match.
         """
         candidate_profile = {
             "skills": candidate_skills,
-            "experience_years": candidate_exp_years
+            "years_of_experience": candidate_exp_years
         }
         job_post = {
             "required_skills": required_skills,
@@ -355,7 +504,7 @@ class JobMatcher:
         min_score: int = 35
     ) -> List[Dict[str, Any]]:
         """
-        Score all posts using deep match and rank by score.
+        Evaluates and ranks a batch of job posts against a candidate profile.
         """
         results = []
         for post in posts:
@@ -364,5 +513,5 @@ class JobMatcher:
             post_copy.update(deep_result)
             results.append(post_copy)
 
-        results.sort(key=lambda x: x["match_score"], reverse=True)
-        return [p for p in results if p["match_score"] >= min_score]
+        results.sort(key=lambda x: x.get("match_score", 0), reverse=True)
+        return [p for p in results if p.get("match_score", 0) >= min_score]

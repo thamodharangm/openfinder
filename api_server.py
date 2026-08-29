@@ -1,18 +1,36 @@
-from fastapi import FastAPI, UploadFile, File, Form, Query, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional, List, Dict, Any
-import shutil
-import tempfile
-import json
-import asyncio
-import uuid
-from pathlib import Path
-import sys
-import logging
+"""
+api_server.py
+=============
+Production-grade Universal AI Job Catcher & Multi-Protocol API Server for OpenFinder.
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger("openfinder")
+Features:
+- Dual Protocol Architecture:
+  1. Claude Web Custom Connector (OAuth 2.0 Auto-Auth + MCP SSE Transport + JSON-RPC 2.0).
+  2. ChatGPT OpenAPI Actions (Strict JSON Schema validation & REST endpoints).
+  3. FastAPI Web Application Server with Swagger UI (/docs) and ReDoc (/redoc).
+- Comprehensive Tools Suite:
+  - `search_opportunities`: Exact freshness (past-1h to past-7d), ATS resume matching, and opportunity ranking.
+  - `upload_resume_text`: Instant plain-text CV ingestion without multipart file upload.
+  - `get_candidate_profile`: Retrieve stored candidate profile across conversational turns.
+  - `generate_recruiter_pitch`: 1-Click composer deep links (Mailto, Gmail, Outlook) & multi-persona outreach suites.
+  - `parse_linkedin_post`: Single LinkedIn /posts/ URL intelligence extraction.
+  - `search_posts` & `search_hiring_posts`: Global posts search with horizontal Markdown table formatting.
+- Async lifespan management, robust error boundaries, and cross-platform UTF-8 terminal encoding.
+"""
+
+import asyncio
+from contextlib import asynccontextmanager
+import json
+import logging
+import os
+from pathlib import Path
+import shutil
+import sys
+import tempfile
+import time
+from typing import Any, Dict, List, Optional, Union
+import urllib.parse
+import uuid
 
 # Ensure UTF-8 stdout/stderr on Windows terminals
 if sys.platform == "win32":
@@ -30,23 +48,48 @@ if str(BASE_DIR) not in sys.path:
 from dotenv import load_dotenv
 load_dotenv()
 
-from core.resume_parser import ResumeParser
+from fastapi import FastAPI, File, Form, Query, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
+
 from core.linkedin_finder import LinkedInFinder
+from core.linkedin_session import LinkedInSessionSearch
 from core.matcher import JobMatcher
 from core.pitch_generator import OutreachPitchGenerator
 from core.post_extractor import LinkedInPostExtractor
+from core.resume_parser import ResumeParser
 from core.service import OpenFinderService
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("openfinder")
+
+# Active SSE sessions for Claude MCP Connectors
+sessions: Dict[str, asyncio.Queue] = {}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Modern FastAPI Lifespan Manager for startup and shutdown hooks."""
+    logger.info("🚀 [OpenFinder] Initializing Dual Protocol API Server...")
+    # Pre-warm services
+    _ = OpenFinderService()
+    yield
+    logger.info("🛑 [OpenFinder] Shutting down API Server. Cleaning active sessions...")
+    sessions.clear()
+
+
 app = FastAPI(
-    title="OpenFinder - Universal AI Job Catcher for Freshers & Experienced",
-    description="Full Dual Protocol API supporting ChatGPT OpenAPI Actions and Claude Web Connectors (MCP SSE & JSON-RPC).",
+    title="OpenFinder - Universal MCP Job Connector for Freshers & Experienced",
+    description="Full Dual Protocol API supporting Claude Web Connectors (MCP SSE & JSON-RPC) and ChatGPT OpenAPI Actions.",
     version="2.0.0",
+    lifespan=lifespan,
     servers=[
         {"url": "https://openfinder.onrender.com", "description": "Production OpenFinder API Server"}
     ]
 )
 
-# Enable CORS and bypass headers
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -59,23 +102,29 @@ service = OpenFinderService()
 resume_parser = ResumeParser()
 linkedin_finder = LinkedInFinder()
 
-# Active SSE sessions
-sessions: Dict[str, asyncio.Queue] = {}
 
+# ==========================================================
+# 🟢 HEALTH & DIAGNOSTICS ENDPOINTS
+# ==========================================================
 
 @app.get("/", tags=["Health"])
+@app.get("/health", tags=["Health"])
 def health_check():
+    """System health check and diagnostics."""
+    session_health = LinkedInSessionSearch.check_session_health()
+    profile_stats = service.profile_store.get_stats()
     return {
         "status": "online",
         "service": "OpenFinder Universal AI Connector",
+        "version": "2.0.0",
         "chatgpt_actions_ready": True,
         "claude_connectors_ready": True,
+        "linkedin_authenticated": session_health.get("valid", False),
+        "candidate_profiles_stored": profile_stats.get("total_saved_profiles", 0),
         "docs_url": "/docs",
         "openapi_url": "/openapi.json"
     }
 
-
-from fastapi.responses import JSONResponse, Response, StreamingResponse, RedirectResponse
 
 # ==========================================================
 # 🟢 CLAUDE WEB CUSTOM CONNECTOR (OAUTH 2.0 & MCP PROTOCOL)
@@ -117,9 +166,7 @@ def oauth_protected_resource_discovery(request: Request):
 
 @app.post("/register", include_in_schema=False)
 async def dynamic_client_register(request: Request):
-    """
-    RFC 7591 compliant Dynamic Client Registration for Claude Connectors.
-    """
+    """RFC 7591 compliant Dynamic Client Registration for Claude Connectors."""
     try:
         body = await request.json()
     except Exception:
@@ -129,7 +176,6 @@ async def dynamic_client_register(request: Request):
     redirect_uris = body.get("redirect_uris", ["https://claude.ai", "https://chatgpt.com"])
     client_name = body.get("client_name", "Claude")
 
-    import time
     return {
         "client_id": "openfinder_client_id",
         "client_secret": "openfinder_client_secret",
@@ -152,15 +198,12 @@ async def oauth_authorize(
     state: Optional[str] = None,
     client_id: Optional[str] = None
 ):
-    """
-    Instant zero-click auto-authorization for Claude Connectors.
-    """
+    """Instant zero-click auto-authorization for Claude Connectors."""
     if not redirect_uri:
         redirect_uri = request.query_params.get("redirect_uri")
     if not state:
         state = request.query_params.get("state")
 
-    # If sent via form or json in POST
     if request.method == "POST" and not redirect_uri:
         try:
             form_or_json = await request.json()
@@ -173,18 +216,15 @@ async def oauth_authorize(
         sep = "&" if "?" in redirect_uri else "?"
         state_param = f"&state={state}" if state else ""
         target = f"{redirect_uri}{sep}code=openfinder_auth_code{state_param}"
-        print(f"🔀 [Claude OAuth] Auto-approving & redirecting Claude to: {target[:70]}...")
+        logger.info(f"🔀 [Claude OAuth] Auto-approving & redirecting to: {target[:70]}...")
         return RedirectResponse(url=target, status_code=302)
-    
+
     return {"status": "authorized", "code": "openfinder_auth_code"}
 
 
 @app.api_route("/oauth/token", methods=["GET", "POST"], include_in_schema=False)
 async def oauth_token(request: Request):
-    """
-    Returns valid bearer & refresh token to Claude Connectors.
-    """
-    print("🔑 [Claude OAuth] Dispatched Bearer Access Token to Claude!")
+    """Returns valid bearer & refresh token to Claude Connectors."""
     return {
         "access_token": "openfinder_secure_bearer_token",
         "token_type": "Bearer",
@@ -197,15 +237,12 @@ async def oauth_token(request: Request):
 @app.get("/sse", include_in_schema=False)
 @app.get("/mcp", include_in_schema=False)
 async def mcp_sse_endpoint(request: Request):
-    """
-    Standard MCP SSE Transport for Claude Web Connectors (GET /sse or GET /mcp).
-    """
+    """Standard MCP SSE Transport for Claude Web Connectors."""
     session_id = str(uuid.uuid4())
     queue = asyncio.Queue()
     sessions[session_id] = queue
 
     async def event_generator():
-        # First send the endpoint event as per MCP specification
         endpoint_url = f"/messages?session_id={session_id}"
         yield f"event: endpoint\ndata: {endpoint_url}\n\n"
 
@@ -217,7 +254,6 @@ async def mcp_sse_endpoint(request: Request):
                 data = await asyncio.wait_for(queue.get(), timeout=15.0)
                 yield f"event: message\ndata: {json.dumps(data)}\n\n"
             except asyncio.TimeoutError:
-                # Keep-alive ping
                 yield ": keep-alive\n\n"
 
     return StreamingResponse(
@@ -236,9 +272,7 @@ async def mcp_sse_endpoint(request: Request):
 @app.post("/", include_in_schema=False)
 @app.post("/mcp", include_in_schema=False)
 async def mcp_message_handler(request: Request):
-    """
-    Handles JSON-RPC 2.0 messages from Claude Connectors (POST /sse, POST /mcp, POST /messages).
-    """
+    """Handles JSON-RPC 2.0 messages from Claude Connectors."""
     try:
         body = await request.json()
     except Exception:
@@ -248,8 +282,6 @@ async def mcp_message_handler(request: Request):
     method = body.get("method")
     params = body.get("params", {})
     client_proto = params.get("protocolVersion", "2024-11-05")
-
-    print(f"📥 [Claude Connector] Received MCP Method: '{method}' (ID: {req_id})")
 
     response_payload = None
 
@@ -274,7 +306,6 @@ async def mcp_message_handler(request: Request):
 
     # 2. Notifications
     elif method == "notifications/initialized":
-        print("✅ [Claude Connector] Initialized successfully by Claude!")
         return Response(status_code=200)
 
     # 3. Ping
@@ -283,102 +314,11 @@ async def mcp_message_handler(request: Request):
 
     # 4. Tools List
     elif method == "tools/list":
-        print("🛠️ [Claude Connector] Claude requested tools list -> Returning 4 tools")
         response_payload = {
             "jsonrpc": "2.0",
             "id": req_id,
             "result": {
                 "tools": [
-                    {
-                        "name": "search_posts",
-                        "description": "Searches global LinkedIn /posts/ by keyword (the 'Posts' tab) with exact freshness filters ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d') and extracts HR contact emails, phone numbers, and tech stack. CRITICAL DISPLAY RULE: Always present results strictly as a horizontal Markdown table with columns: # | Company | Role | Experience | Location | Posted Time | HR Contact / Email | Direct Link. Never output vertical lists.",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "keywords": {
-                                    "type": "string",
-                                    "description": "Search query for LinkedIn posts (e.g. 'React Developer hiring Bangalore')"
-                                },
-                                "date_posted": {
-                                    "type": "string",
-                                    "description": "Recency filter: 'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d'",
-                                    "default": "past-24h"
-                                },
-                                "max_results": {
-                                    "type": "integer",
-                                    "description": "Max number of posts to fetch",
-                                    "default": 23
-                                }
-                            },
-                            "required": ["keywords"]
-                        }
-                    },
-                    {
-                        "name": "parse_linkedin_post",
-                        "description": "Extracts author, hiring company, direct HR emails, phone numbers, tech stack, and tailored recruiter pitches from any LinkedIn /posts/ URL.",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "post_url": {
-                                    "type": "string",
-                                    "description": "The direct LinkedIn post URL (e.g. https://www.linkedin.com/posts/...)"
-                                },
-                                "candidate_name": {
-                                    "type": "string",
-                                    "description": "Candidate's full name for customized pitches",
-                                    "default": "Candidate"
-                                },
-                                "candidate_exp_years": {
-                                    "type": "integer",
-                                    "description": "Candidate's total years of experience",
-                                    "default": 0
-                                }
-                            },
-                            "required": ["post_url"]
-                        }
-                    },
-                    {
-                        "name": "search_hiring_posts",
-                        "description": "Searches real-time live LinkedIn recruiter hiring posts with direct post links, candidate ATS match fit, and contact details. CRITICAL DISPLAY RULE: Always present results strictly as a horizontal Markdown table with columns: # | Company | Role | Experience | Location | Posted Time | ATS Fit | HR Contact / Email | Direct Link. Never output vertical lists.",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "keywords": {
-                                    "type": "string",
-                                    "description": "Job role or tech stack (e.g. 'React Developer', 'MERN Stack')"
-                                },
-                                "location": {
-                                    "type": "string",
-                                    "description": "Location (e.g. 'Bangalore', 'Remote', 'India')",
-                                    "default": "India"
-                                },
-                                "timeframe": {
-                                    "type": "string",
-                                    "description": "Freshness filter ('past-24h', 'past-week', 'past-month')",
-                                    "default": "past-24h"
-                                },
-                                "candidate_name": {
-                                    "type": "string",
-                                    "description": "Candidate full name"
-                                },
-                                "candidate_skills": {
-                                    "type": "string",
-                                    "description": "Comma-separated technical skills for candidate ATS fit scoring (e.g. 'React, Node.js, Express, MongoDB')"
-                                },
-                                "candidate_exp_years": {
-                                    "type": "integer",
-                                    "description": "Candidate years of experience (e.g. 1)",
-                                    "default": 1
-                                },
-                                "max_results": {
-                                    "type": "integer",
-                                    "description": "Max results to fetch",
-                                    "default": 23
-                                }
-                            },
-                            "required": ["keywords"]
-                        }
-                    },
                     {
                         "name": "search_opportunities",
                         "description": "Canonical search tool discovering verified LinkedIn recruiter hiring /posts/ with exact freshness validation (past-1h, past-4h, past-12h, past-24h, past-7d), directional hiring intent, and opportunity ranking against candidate profile or inline skills.",
@@ -396,6 +336,17 @@ async def mcp_message_handler(request: Request):
                                 "candidate_name": { "type": "string", "description": "Candidate full name" }
                             },
                             "required": ["query"]
+                        }
+                    },
+                    {
+                        "name": "upload_resume_text",
+                        "description": "Parses candidate plain text CV and stores persistent profile for ATS matching across search turns.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "resume_text": { "type": "string", "description": "Plain text content of the candidate's resume/CV" }
+                            },
+                            "required": ["resume_text"]
                         }
                     },
                     {
@@ -425,6 +376,32 @@ async def mcp_message_handler(request: Request):
                             },
                             "required": ["job_title"]
                         }
+                    },
+                    {
+                        "name": "parse_linkedin_post",
+                        "description": "Extracts author, hiring company, direct HR emails, phone numbers, tech stack, and tailored recruiter pitches from any LinkedIn /posts/ URL.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "post_url": { "type": "string", "description": "The direct LinkedIn post URL (e.g. https://www.linkedin.com/posts/...)" },
+                                "candidate_name": { "type": "string", "description": "Candidate's full name for customized pitches", "default": "Candidate" },
+                                "candidate_exp_years": { "type": "integer", "description": "Candidate's total years of experience", "default": 0 }
+                            },
+                            "required": ["post_url"]
+                        }
+                    },
+                    {
+                        "name": "search_posts",
+                        "description": "Searches global LinkedIn /posts/ by keyword (the 'Posts' tab) with exact freshness filters ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d') and extracts HR contact emails, phone numbers, and tech stack. CRITICAL DISPLAY RULE: Always present results strictly as a horizontal Markdown table with columns: # | Company | Role | Experience | Location | Posted Time | HR Contact / Email | Direct Link. Never output vertical lists.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "keywords": { "type": "string", "description": "Search query for LinkedIn posts (e.g. 'React Developer hiring Bangalore')" },
+                                "date_posted": { "type": "string", "description": "Recency filter: 'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d'", "default": "past-24h" },
+                                "max_results": { "type": "integer", "description": "Max number of posts to fetch", "default": 23 }
+                            },
+                            "required": ["keywords"]
+                        }
                     }
                 ]
             }
@@ -436,187 +413,84 @@ async def mcp_message_handler(request: Request):
         args = params.get("arguments", {})
 
         if tool_name == "search_opportunities":
-            query = args.get("query", "React Developer")
-            location = args.get("location", "India")
-            timeframe = args.get("timeframe", "past-24h")
-            max_results = args.get("max_results", 10)
-            remote_only = args.get("remote_only", False)
-            candidate_profile_id = args.get("candidate_profile_id")
-            candidate_skills = args.get("candidate_skills")
-            candidate_exp_years = args.get("candidate_exp_years")
-            candidate_name = args.get("candidate_name")
-
             res = await service.search_opportunities_async(
-                query=query,
-                location=location,
-                timeframe=timeframe,
-                max_results=max_results,
-                remote_only=remote_only,
-                candidate_profile_id=candidate_profile_id,
-                candidate_skills=candidate_skills,
-                candidate_exp_years=candidate_exp_years,
-                candidate_name=candidate_name
+                query=args.get("query", "React Developer"),
+                location=args.get("location", "India"),
+                timeframe=args.get("timeframe", "past-24h"),
+                max_results=args.get("max_results", 10),
+                remote_only=args.get("remote_only", False),
+                candidate_profile_id=args.get("candidate_profile_id"),
+                candidate_skills=args.get("candidate_skills"),
+                candidate_exp_years=args.get("candidate_exp_years"),
+                candidate_name=args.get("candidate_name")
             )
-
             response_payload = {
                 "jsonrpc": "2.0",
                 "id": req_id,
-                "result": {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": json.dumps(res, indent=2)
-                        }
-                    ]
-                }
+                "result": {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
+            }
+
+        elif tool_name == "upload_resume_text":
+            resume_text = args.get("resume_text", "")
+            res = service.upload_resume_text(resume_text)
+            response_payload = {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
+            }
+
+        elif tool_name == "get_candidate_profile":
+            prof = service.get_candidate_profile(args.get("candidate_profile_id", ""))
+            response_payload = {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {"content": [{"type": "text", "text": json.dumps(prof, indent=2)}]}
+            }
+
+        elif tool_name == "generate_recruiter_pitch":
+            pitches = service.generate_pitch(
+                job_title=args.get("job_title", "Software Engineer"),
+                company_name=args.get("company_name", "Hiring Team"),
+                matched_skills=[s.strip() for s in args.get("matched_skills", "React").split(",") if s.strip()],
+                candidate_name=args.get("candidate_name", "Candidate"),
+                candidate_exp_years=int(args.get("candidate_exp_years", 1)),
+                recipient_name=args.get("recipient_name") or args.get("author"),
+                recipient_email=args.get("recipient_email") or args.get("hr_email")
+            )
+            response_payload = {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {"content": [{"type": "text", "text": json.dumps({"status": "success", "pitches": pitches}, indent=2)}]}
+            }
+
+        elif tool_name == "parse_linkedin_post":
+            post_data = await asyncio.to_thread(
+                service.parse_linkedin_post,
+                url=args.get("post_url", ""),
+                candidate_profile_id=args.get("candidate_profile_id")
+            )
+            response_payload = {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {"content": [{"type": "text", "text": json.dumps({"status": "success", "post": post_data}, indent=2)}]}
             }
 
         elif tool_name == "search_posts":
-            keywords = args.get("keywords", "React Developer hiring")
-            date_posted = args.get("date_posted", "past-24h")
-            max_results = args.get("max_results", 23)
-
             posts = await asyncio.to_thread(
                 linkedin_finder.search_posts,
-                keywords=keywords,
-                date_posted=date_posted,
-                max_results=max_results
+                keywords=args.get("keywords", "React Developer hiring"),
+                date_posted=args.get("date_posted", "past-24h"),
+                max_results=args.get("max_results", 23)
             )
             table = LinkedInFinder.format_as_markdown_table(posts)
             response_payload = {
                 "jsonrpc": "2.0",
                 "id": req_id,
-                "result": {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": json.dumps({"status": "success", "count": len(posts), "markdown_table": table, "posts": posts}, indent=2)
-                        }
-                    ]
-                }
-            }
-
-        elif tool_name == "parse_linkedin_post":
-            post_url = args.get("post_url")
-            c_name = args.get("candidate_name", "Candidate")
-            c_exp = args.get("candidate_exp_years", 0)
-
-            cand_profile = None
-            if c_name != "Candidate" or c_exp > 0:
-                cand_profile = {
-                    "candidate_name": c_name,
-                    "years_of_experience": c_exp,
-                    "top_skills": [],
-                    "target_roles": []
-                }
-
-            post_data = await asyncio.to_thread(
-                LinkedInPostExtractor.extract_from_url,
-                url=post_url,
-                candidate_profile=cand_profile
-            )
-
-            response_payload = {
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": json.dumps({"status": "success", "post": post_data}, indent=2)
-                        }
-                    ]
-                }
-            }
-
-        elif tool_name == "search_hiring_posts":
-            keywords = args.get("keywords", "React Developer")
-            location = args.get("location", "India")
-            timeframe = args.get("timeframe", "past-24h")
-            max_results = args.get("max_results", 23)
-            logger.info(f"🔍 [MCP search_hiring_posts] query='{keywords}', location='{location}', timeframe='{timeframe}', max={max_results}")
-            res = await service.search_opportunities_async(
-                query=keywords,
-                location=location,
-                timeframe=timeframe,
-                max_results=max_results
-            )
-            logger.info(f"📊 [MCP search_hiring_posts] Found {res.get('count', 0)} posts")
-
-            table = ""
-            if res.get("results"):
-                table = LinkedInFinder.format_as_markdown_table(res["results"])
-
-            response_payload = {
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": json.dumps({
-                                "status": "success",
-                                "count": res.get("count", 0),
-                                "markdown_table": table,
-                                "results": res.get("results", [])
-                            }, indent=2)
-                        }
-                    ]
-                }
-            }
-
-        elif tool_name == "get_candidate_profile":
-            candidate_profile_id = args.get("candidate_profile_id", "")
-            prof = service.get_candidate_profile(candidate_profile_id)
-
-            response_payload = {
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": json.dumps(prof, indent=2)
-                        }
-                    ]
-                }
-            }
-
-        elif tool_name == "generate_recruiter_pitch":
-            job_title = args.get("job_title", "Software Engineer")
-            company_name = args.get("company_name", "Hiring Team")
-            matched_skills = [s.strip() for s in args.get("matched_skills", "React").split(",") if s.strip()]
-            candidate_name = args.get("candidate_name", "Candidate")
-            candidate_exp_years = int(args.get("candidate_exp_years", 1))
-            recipient_name = args.get("recipient_name") or args.get("author")
-            recipient_email = args.get("recipient_email") or args.get("hr_email")
-
-            pitches = OutreachPitchGenerator.generate_suite(
-                job_title=job_title,
-                company_name=company_name,
-                matched_skills=matched_skills,
-                candidate_name=candidate_name,
-                candidate_exp_years=candidate_exp_years,
-                recipient_name=recipient_name,
-                recipient_email=recipient_email
-            )
-
-            response_payload = {
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": json.dumps({"status": "success", "pitches": pitches}, indent=2)
-                        }
-                    ]
-                }
+                "result": {"content": [{"type": "text", "text": json.dumps({"status": "success", "count": len(posts), "markdown_table": table, "posts": posts}, indent=2)}]}
             }
 
     try:
         if response_payload:
-            # Check if session_id query param exists for SSE routing
             session_id = request.query_params.get("session_id")
             if session_id and session_id in sessions:
                 await sessions[session_id].put(response_payload)
@@ -627,20 +501,11 @@ async def mcp_message_handler(request: Request):
             content={"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": f"Method '{method}' not found"}}
         )
     except Exception as exc:
-        import traceback
-        err_trace = traceback.format_exc()
-        logger.error(f"❌ [MCP Error] Exception during '{method}': {err_trace}")
+        logger.error(f"❌ [MCP Error] Exception during '{method}': {exc}")
         error_resp = {
             "jsonrpc": "2.0",
             "id": req_id,
-            "result": {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": json.dumps({"status": "error", "reason": "EXECUTION_EXCEPTION", "error": str(exc)}, indent=2)
-                    }
-                ]
-            }
+            "result": {"content": [{"type": "text", "text": json.dumps({"status": "error", "error": str(exc)}, indent=2)}]}
         }
         session_id = request.query_params.get("session_id")
         if session_id and session_id in sessions:
@@ -650,61 +515,56 @@ async def mcp_message_handler(request: Request):
 
 
 # ==========================================================
-# 🟢 CANONICAL PRODUCT & CHATGPT OPENAPI REST ENDPOINTS (PHASE 8)
+# 🟢 CANONICAL REST & CHATGPT OPENAPI ENDPOINTS
 # ==========================================================
 
 @app.post("/api/upload-resume", tags=["Resume"])
 async def upload_resume_endpoint(file: UploadFile = File(...)) -> Dict[str, Any]:
-    """
-    Uploads and parses candidate PDF resume, creating a persistent candidate profile
-    and returning a unique candidate_profile_id for personalized job searches.
-    """
+    """Uploads and parses candidate PDF resume, creating a persistent candidate profile."""
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         shutil.copyfileobj(file.file, tmp)
         tmp_path = tmp.name
 
     try:
-        res = service.upload_resume(tmp_path)
-        return res
+        return service.upload_resume(tmp_path)
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
 
+@app.post("/api/upload-resume-text", tags=["Resume"])
+async def upload_resume_text_endpoint(payload: Dict[str, str]) -> Dict[str, Any]:
+    """Direct plain text resume ingestion."""
+    text = payload.get("resume_text", "")
+    return service.upload_resume_text(text)
+
+
 @app.post("/api/create-candidate-profile", tags=["Resume"])
 async def create_candidate_profile_endpoint(profile_data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Creates or updates a persistent candidate profile from JSON (used by ChatGPT).
-    """
+    """Creates or updates a persistent candidate profile from JSON."""
     return service.create_candidate_profile(profile_data)
 
 
 @app.get("/api/candidate-profile/{profile_id}", tags=["Resume"])
 def get_candidate_profile_endpoint(profile_id: str) -> Dict[str, Any]:
-    """
-    Retrieves stored candidate profile by ID.
-    """
+    """Retrieves stored candidate profile by ID."""
     return service.get_candidate_profile(profile_id)
 
 
 @app.get("/api/search-opportunities", tags=["Opportunities"])
 @app.post("/api/search-opportunities", tags=["Opportunities"])
 async def search_opportunities_endpoint(
-    query: str = Query("React Developer", description="Role or tech stack (e.g. 'React Developer', 'Python FastAPI')"),
-    location: str = Query("India", description="Target city/location (e.g. 'Bangalore', 'Remote', 'India')"),
+    query: str = Query("React Developer", description="Role or tech stack"),
+    location: str = Query("India", description="Target city/location"),
     timeframe: str = Query("past-24h", description="Freshness window ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d')"),
     max_results: int = Query(23, description="Max opportunities (1-30)"),
     remote_only: bool = Query(False, description="Filter for remote roles"),
-    candidate_profile_id: Optional[str] = Query(None, description="Optional candidate profile ID for ATS skill & experience fit"),
-    candidate_skills: Optional[str] = Query(None, description="Comma-separated candidate skills for instant ATS matching (e.g. 'React, Node.js, Express, MongoDB')"),
+    candidate_profile_id: Optional[str] = Query(None, description="Optional candidate profile ID"),
+    candidate_skills: Optional[str] = Query(None, description="Comma-separated candidate skills"),
     candidate_exp_years: Optional[int] = Query(None, description="Candidate total years of experience"),
     candidate_name: Optional[str] = Query(None, description="Candidate name"),
     debug: bool = Query(False, description="Include funnel and latency metrics")
 ) -> Dict[str, Any]:
-    """
-    Canonical Opportunity Search endpoint.
-    Searches verified LinkedIn hiring /posts/ with exact freshness validation,
-    directional hiring intent, and opportunity ranking against candidate profile or inline skills.
-    """
+    """Canonical Opportunity Search endpoint."""
     try:
         return await service.search_opportunities_async(
             query=query,
@@ -719,8 +579,7 @@ async def search_opportunities_endpoint(
             debug=debug
         )
     except Exception as e:
-        import traceback
-        logger.error(f"❌ [REST search-opportunities Error]: {traceback.format_exc()}")
+        logger.error(f"❌ [REST search-opportunities Error]: {e}")
         return {
             "status": "error",
             "query": query,
@@ -728,126 +587,27 @@ async def search_opportunities_endpoint(
             "timeframe": timeframe,
             "count": 0,
             "results": [],
-            "message": f"Search encountered an internal exception: {str(e)}"
+            "message": f"Search encountered an exception: {str(e)}"
         }
-
-
-# ==========================================================
-# 🟢 LEGACY & COMPATIBILITY REST ENDPOINTS
-# ==========================================================
-
-@app.post("/api/parse-resume", tags=["Resume"])
-async def parse_resume_endpoint(file: UploadFile = File(...)) -> Dict[str, Any]:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-        shutil.copyfileobj(file.file, tmp)
-        tmp_path = tmp.name
-
-    try:
-        profile = resume_parser.parse(tmp_path)
-        return {"status": "success", "profile": profile}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
-
-
-@app.post("/api/search-jobs-by-resume", tags=["Jobs"])
-async def search_jobs_by_resume_endpoint(
-    file: UploadFile = File(...),
-    location: str = Form("India"),
-    timeframe: str = Form("past-24h"),
-    remote_only: bool = Form(False),
-    min_match_score: int = Form(35)
-) -> Dict[str, Any]:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-        shutil.copyfileobj(file.file, tmp)
-        tmp_path = tmp.name
-
-    try:
-        profile = resume_parser.parse(tmp_path)
-        top_skills = profile.get("top_skills", [])
-        primary_role = profile.get("primary_role", "Software Engineer")
-
-        search_kw = primary_role
-        if len(top_skills) >= 2:
-            search_kw = f"{top_skills[0]} {top_skills[1]}"
-
-        posts = linkedin_finder.search_hiring_posts(
-            keywords=search_kw,
-            location=location,
-            timeframe=timeframe,
-            remote_only=remote_only,
-            max_results=15
-        )
-
-        ranked_jobs = JobMatcher.rank_and_score_posts(
-            candidate_profile=profile,
-            posts=posts,
-            min_score=min_match_score
-        )
-
-        return {
-            "status": "success",
-            "candidate_profile": {
-                "name": profile.get("candidate_name"),
-                "seniority": profile.get("seniority_level"),
-                "years_experience": profile.get("years_of_experience"),
-                "target_roles": profile.get("target_roles"),
-                "skills_categorized": profile.get("skills_categorized")
-            },
-            "total_matches": len(ranked_jobs),
-            "jobs": ranked_jobs
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
-
-
-@app.get("/api/search-hiring-posts", tags=["Jobs"])
-def search_hiring_posts_endpoint(
-    keywords: str = Query(..., description="Role or technical skill (e.g. 'React Developer', 'Python Backend')"),
-    location: str = Query("India", description="Location (e.g. 'Bangalore', 'Remote', 'India')"),
-    timeframe: str = Query("past-24h", description="'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d'"),
-    remote_only: bool = Query(False, description="Filter only remote positions"),
-    max_results: int = Query(10, description="Max results to fetch")
-) -> Dict[str, Any]:
-    try:
-        posts = linkedin_finder.search_hiring_posts(
-            keywords=keywords,
-            location=location,
-            timeframe=timeframe,
-            remote_only=remote_only,
-            max_results=max_results
-        )
-        table = LinkedInFinder.format_as_markdown_table(posts)
-        return {
-            "status": "success",
-            "count": len(posts),
-            "query": keywords,
-            "timeframe": timeframe,
-            "markdown_table": table,
-            "posts": posts
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
 
 @app.post("/api/generate-pitch", tags=["Outreach"])
 def generate_pitch_endpoint(
-    job_title: str = Form(..., description="Job role title (e.g. 'React Developer')"),
+    job_title: str = Form(..., description="Job role title"),
     company_name: str = Form("Hiring Team", description="Target company name"),
     matched_skills: str = Form("React, Node.js", description="Comma-separated matched skills"),
     candidate_name: str = Form("Candidate", description="Your name for sign-off"),
-    candidate_exp_years: int = Form(2, description="Years of candidate experience")
+    candidate_exp_years: int = Form(2, description="Years of candidate experience"),
+    recipient_email: Optional[str] = Form(None, description="Recruiter contact email")
 ) -> Dict[str, Any]:
-    skills_list = [s.strip() for s in matched_skills.split(",") if s.strip()]
-    pitches = OutreachPitchGenerator.generate_suite(
+    """Generates multi-persona outreach suite with 1-click mail deep links."""
+    pitches = service.generate_pitch(
         job_title=job_title,
         company_name=company_name,
-        matched_skills=skills_list,
+        matched_skills=[s.strip() for s in matched_skills.split(",") if s.strip()],
         candidate_name=candidate_name,
-        candidate_exp_years=candidate_exp_years
+        candidate_exp_years=candidate_exp_years,
+        recipient_email=recipient_email
     )
     return {
         "status": "success",
@@ -864,29 +624,22 @@ def parse_post_endpoint(
     candidate_name: str = Query("Candidate", description="Your name for outreach sign-off"),
     candidate_exp_years: int = Query(2, description="Your years of experience")
 ) -> Dict[str, Any]:
-    """
-    Directly extracts structured hiring data (HR email, phone, skills, role)
-    from any genuine LinkedIn /posts/ URL and generates customized outreach pitches.
-    """
-    return LinkedInPostExtractor.extract_from_url(
+    """Extracts structured hiring intelligence from a LinkedIn post URL."""
+    return service.parse_linkedin_post(
         url=post_url,
-        candidate_name=candidate_name,
-        candidate_exp_years=candidate_exp_years
+        candidate_profile_id=None
     )
 
 
 @app.get("/api/search-posts", tags=["Post Search"])
 @app.post("/api/search-posts", tags=["Post Search"])
 def search_posts_endpoint(
-    keywords: str = Query(..., description="Post keywords (e.g. 'React Developer hiring Bangalore')"),
-    date_posted: str = Query("past-24h", description="Recency filter ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d')"),
+    keywords: str = Query(..., description="Post keywords"),
+    date_posted: str = Query("past-24h", description="Recency filter"),
     max_results: int = Query(10, description="Max posts to retrieve")
 ) -> Dict[str, Any]:
-    """
-    Searches LinkedIn /posts/ globally by keyword (the 'Posts' tab) with exact freshness filters.
-    """
-    finder = LinkedInFinder()
-    results = finder.search_posts(
+    """Searches LinkedIn /posts/ globally by keyword."""
+    results = linkedin_finder.search_posts(
         keywords=keywords,
         date_posted=date_posted,
         max_results=max_results
@@ -905,12 +658,11 @@ def search_posts_endpoint(
 # ==========================================================
 # 🟢 CHATGPT ACTIONS STRICT OPENAPI VALIDATION GENERATOR
 # ==========================================================
-from fastapi.openapi.utils import get_openapi
 
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
-    
+
     schema = get_openapi(
         title=app.title,
         version=app.version,
@@ -923,7 +675,6 @@ def custom_openapi():
 
     def sanitize_schema(node):
         if isinstance(node, dict):
-            # ChatGPT OpenAPI requirement: Any schema of type 'object' MUST have 'properties'
             if node.get("type") == "object":
                 if "properties" not in node and "additionalProperties" not in node:
                     node["properties"] = {}

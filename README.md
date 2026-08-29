@@ -2,11 +2,11 @@
   <img src="openfinderlogo.svg" alt="OpenFinder Logo" width="460" />
 </p>
 
-<h1 align="center">🎯 OpenFinder v2.0 - Universal AI Job Catcher & Recruiter Scout</h1>
+<h1 align="center">🎯 OpenFinder v2.0 - Universal MCP Job Connector</h1>
 
 <p align="center">
-  <strong>High-Precision, Real-Time LinkedIn Hiring Post Finder, Candidate Resume Matcher & Recruiter Outreach Engine</strong><br>
-  <em>Dual Protocol API & Integration Hub for Claude Desktop (MCP), ChatGPT Custom GPT Actions, Cursor, Antigravity & Python CLI</em>
+  <strong>Universal MCP Connector for Freshers & Experienced Candidates via Claude & ChatGPT</strong><br>
+  <em>Dual Protocol MCP Tool & API Integration Hub for Claude Desktop, ChatGPT Custom GPT Actions, Cursor, Antigravity & Python CLI</em>
 </p>
 
 <p align="center">

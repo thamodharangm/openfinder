@@ -1,12 +1,29 @@
+"""
+core/ranking.py
+===============
+Production-grade Multi-Signal Opportunity Ranking & ATS Candidate Scoring Layer.
+
+Features:
+- Dual-Score architecture: Post Quality Score (45%) + ATS Candidate Match Score (55%).
+- Deep candidate profile integration (Skills, Years of Exp, Desired Domains, Location, Education).
+- Multi-factor breakdown: Hiring Intent (25%), Freshness (20%), Role Precision (30%), Location Alignment (15%), Experience Fit (5%), Direct Contact Richness (5%).
+- Soft company & recruiter diversity damping to prevent single-firm domination.
+- Deterministic 5-stage tie-breakers with evidence-based ranking reasons and human-readable summaries.
+"""
+
+import logging
 import re
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
+
 from core.hiring_intent import (
-    RoleRelevanceMatcher,
-    LocationRelevanceMatcher,
     ExperienceRelevanceMatcher,
-    QualityScorer
+    LocationRelevanceMatcher,
+    QualityScorer,
+    RoleRelevanceMatcher,
 )
 from core.matcher import JobMatcher
+
+logger = logging.getLogger(__name__)
 
 
 class OpportunityRanker:
@@ -34,15 +51,15 @@ class OpportunityRanker:
         """
         # 1. Intent Factor
         hiring_conf = post.get("hiring_confidence", 0.9)
-        intent_score = int(hiring_conf * 100)
+        intent_score = int(max(10, min(round(hiring_conf * 100), 100)))
 
         # 2. Freshness Factor (Linear decay within window)
         age_minutes = post.get("age_minutes", 0)
         if max_age_minutes > 0 and age_minutes >= 0:
             freshness_ratio = max(0.0, 1.0 - (age_minutes / max_age_minutes))
-            freshness_score = int(freshness_ratio * 100)
+            freshness_score = int(round(freshness_ratio * 100))
         else:
-            freshness_score = 50
+            freshness_score = 60
 
         # 3. Role Factor
         role_score = post.get("role_match_score")
@@ -75,30 +92,33 @@ class OpportunityRanker:
             )
             exp_score = exp_res.get("score", 75)
 
-        # 6. Contact Factor
+        # 6. Contact & Apply Link Factor
         emails = post.get("recruiter_emails") or post.get("contact_emails") or []
         phones = post.get("contact_phones") or post.get("contact_numbers") or []
+        links = post.get("application_links") or []
         contact_raw = 0
         if emails:
-            contact_raw += 50
+            contact_raw += 45
         if phones:
-            contact_raw += 30
-        if post.get("post_url"):
+            contact_raw += 25
+        if links:
             contact_raw += 20
+        if post.get("post_url"):
+            contact_raw += 10
         contact_score = min(100, contact_raw)
 
-        # Overall Post Quality (Intent 25%, Freshness 20%, Role 30%, Location 15%, Experience 5%, Contact 5%)
-        # If specific city requested and post location is a mismatch (score < 50), apply a penalty
+        # Overall Post Quality Calculation
+        # Intent 25%, Freshness 20%, Role 30%, Location 15%, Experience 5%, Contact 5%
         loc_penalty = 25 if (target_location and target_location.lower() not in ["india", "remote", "any", ""] and loc_score < 50) else 0
 
-        total_quality = int(
+        total_quality = int(round(
             (intent_score * 0.25) +
             (freshness_score * 0.20) +
             (role_score * 0.30) +
             (loc_score * 0.15) +
             (exp_score * 0.05) +
             (contact_score * 0.05)
-        ) - loc_penalty
+        )) - loc_penalty
         total_quality = max(0, min(100, total_quality))
 
         factors = {
@@ -127,14 +147,17 @@ class OpportunityRanker:
         """
         cand_exp = 2
         if candidate_profile:
-            cand_exp = candidate_profile.get("years_of_experience", 2)
-            if isinstance(cand_exp, str):
+            cand_exp_val = candidate_profile.get("years_of_experience") or candidate_profile.get("experience_years", 2)
+            if isinstance(cand_exp_val, str):
                 try:
-                    cand_exp = int(re.search(r'\d+', cand_exp).group(0))
+                    m = re.search(r'\d+', cand_exp_val)
+                    cand_exp = int(m.group(0)) if m else 2
                 except Exception:
                     cand_exp = 2
+            elif isinstance(cand_exp_val, int):
+                cand_exp = cand_exp_val
 
-        # 1. Calculate Post Quality
+        # 1. Calculate Post Quality Score
         post_quality, factors = cls.calculate_post_quality(
             post=post,
             target_role=target_role,
@@ -143,19 +166,13 @@ class OpportunityRanker:
             max_age_minutes=max_age_minutes
         )
 
-        # 2. Calculate Candidate Fit Score
+        # 2. Calculate Candidate Fit Score via Deep Matcher
         candidate_match_score = None
-        match_data = {}
-        if candidate_profile and (candidate_profile.get("top_skills") or candidate_profile.get("primary_role")):
-            cand_skills = candidate_profile.get("top_skills", [])
-            req_skills = post.get("skills") or post.get("required_skills") or post.get("detected_skills") or []
-            exp_str = post.get("experience_required") or post.get("full_post_content") or ""
-
-            match_data = JobMatcher.calculate_weighted_match(
-                candidate_skills=cand_skills,
-                candidate_exp_years=cand_exp,
-                required_skills=req_skills,
-                experience_required_str=exp_str
+        match_data: Dict[str, Any] = {}
+        if candidate_profile and (candidate_profile.get("top_skills") or candidate_profile.get("skills") or candidate_profile.get("primary_role")):
+            match_data = JobMatcher.calculate_deep_match(
+                candidate_profile=candidate_profile,
+                job_post=post
             )
             candidate_match_score = match_data.get("match_score", 70)
             factors["candidate_fit"] = candidate_match_score
@@ -174,8 +191,8 @@ class OpportunityRanker:
         final_rank_score = max(0, min(100, final_rank_score))
 
         # 4. Generate Explainable Evidence Reasons
-        reasons = []
-        role_name = post.get("role") or post.get("job_role") or post.get("title") or "Developer"
+        reasons: List[str] = []
+        role_name = post.get("role") or post.get("job_role") or post.get("title") or "Software Engineer"
         role_reason = post.get("role_match_reason") or f"{factors['role_relevance']}% role match"
         reasons.append(f"{role_name} ({role_reason})")
 
@@ -195,6 +212,10 @@ class OpportunityRanker:
         emails = post.get("recruiter_emails") or post.get("contact_emails") or []
         if emails:
             reasons.append(f"Direct contact: {emails[0]}")
+
+        sal_str = post.get("salary_range")
+        if sal_str and sal_str.lower() not in ["competitive / disclosed in post", "competitive / not disclosed"]:
+            reasons.append(f"Compensation: {sal_str}")
 
         # Summary line
         company_name = post.get("company", "Hiring Team")
@@ -232,7 +253,7 @@ class OpportunityRanker:
         """
         Scores, diversifies, and deterministically ranks a collection of candidate posts.
         Enforces tie-breakers:
-          1. final_rank_score DESC
+          1. _adjusted_rank_score DESC
           2. post_quality_score DESC
           3. candidate_match_score DESC (or 0)
           4. age_minutes ASC
@@ -265,7 +286,6 @@ class OpportunityRanker:
         ]
 
         # Initial deterministic sort:
-        # If target location is a specific city, prioritize matching location posts (score >= 70) first
         evaluated_posts.sort(
             key=lambda x: (
                 (1 if (x.get("ranking_factors", {}).get("location_relevance", 100) >= 70) else 0) if (target_location and target_location.lower() not in ["india", "remote", "any", ""]) else 1,

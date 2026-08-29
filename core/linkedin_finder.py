@@ -1,28 +1,76 @@
-import re
-import asyncio
-import urllib.parse
-from typing import List, Dict, Any, Optional
-import httpx
-from bs4 import BeautifulSoup
-import sys
-from pathlib import Path
+"""
+core/linkedin_finder.py
+=======================
+Production-grade LinkedIn Hiring Post Discovery and Search Orchestrator.
 
-# Add parent dir to path
+Features:
+- Multi-channel discovery: Authenticated session search -> Parallel Search Engine Dorking -> Live Curated Repository.
+- Robust HTTP connection pooling with exponential retry backoff and custom headers.
+- Safe async execution bridge supporting nested event loops (FastAPI, MCP, Jupyter, CLI).
+- Accurate publication timestamps with dynamic on-the-fly freshness recalculation for cached hits.
+- Seamless ATS candidate profile matching integration with OpportunityRanker.
+- Enterprise Markdown table formatting with rich badges and recruiter contact highlights.
+- Zero-downtime fallback mechanisms and structured production telemetry/logging.
+"""
+
+import asyncio
+import base64
+import logging
+from pathlib import Path
+import re
+import sys
+from typing import Any, Dict, List, Optional
+import urllib.parse
+
+from bs4 import BeautifulSoup
+import httpx
+
+# Add parent dir to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import COMMON_SKILLS, DEFAULT_LOCATION, DEFAULT_MAX_RESULTS
-from core.linkedin_urls import is_valid_linkedin_post_url, normalize_linkedin_post_url
-from core.time_utils import (
-    get_max_age_minutes,
-    extract_snowflake_timestamp,
-    is_within_window,
-    calculate_age,
-    FRESHNESS_WINDOWS
-)
-from core.search_intent import SearchIntentParser, SearchIntent
-from core.spam_filter import is_spam_or_bait
 from core.cache import SearchCache
-from core.post_extractor import LinkedInPostExtractor
 from core.linkedin_session import LinkedInSessionSearch
+from core.linkedin_urls import is_valid_linkedin_post_url, normalize_linkedin_post_url
+from core.post_extractor import LinkedInPostExtractor
+from core.ranking import OpportunityRanker
+from core.search_intent import SearchIntent, SearchIntentParser
+from core.time_utils import (
+    FRESHNESS_WINDOWS,
+    calculate_age,
+    extract_snowflake_timestamp,
+    get_max_age_minutes,
+    is_within_window,
+    parse_timestamp,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _run_async_safely(coro):
+    """
+    Safely executes an async coroutine across various runtime environments:
+    - Standard CLI / Scripts (no loop running)
+    - Active asyncio event loops (FastAPI / MCP servers / Jupyter) using nest_asyncio or runner.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    if loop.is_running():
+        try:
+            import nest_asyncio
+            nest_asyncio.apply()
+            return loop.run_until_complete(coro)
+        except Exception:
+            # Fallback: run in a dedicated temporary thread if loop is actively driving another task
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(lambda: asyncio.run(coro))
+                return future.result()
+    else:
+        return loop.run_until_complete(coro)
 
 
 class LinkedInFinder:
@@ -32,14 +80,22 @@ class LinkedInFinder:
     verified HIRING intent, role family matching, and discovery funnel metrics.
     """
 
-    def __init__(self, skills_taxonomy: Optional[List[str]] = None):
+    HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/126.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "DNT": "1",
+        "Upgrade-Insecure-Requests": "1",
+    }
+
+    def __init__(self, skills_taxonomy: Optional[List[str]] = None, cache: Optional[SearchCache] = None):
         self.skills_taxonomy = skills_taxonomy or COMMON_SKILLS
-        self.cache = SearchCache()
-        self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9"
-        }
+        self.cache = cache or SearchCache()
+        self.headers = self.HEADERS.copy()
 
     @staticmethod
     def is_valid_recruiter_post_url(url: str) -> bool:
@@ -57,7 +113,7 @@ class LinkedInFinder:
 
         headers = ["#", "Company", "Role", "Experience", "Location", "Posted Time", "HR Contact / Email", "Direct Link"]
         alignments = [":---:", "---", "---", ":---:", "---", ":---:", "---", ":---:"]
-        
+
         lines = [
             "| " + " | ".join(headers) + " |",
             "| " + " | ".join(alignments) + " |"
@@ -88,34 +144,51 @@ class LinkedInFinder:
 
     def clean_linkedin_url(self, raw_url: str) -> Optional[str]:
         """
-        Decodes redirect wrappers and normalizes into a clean LinkedIn /posts/ URL.
+        Decodes redirect wrappers (Yahoo, Bing, Google redirects) and normalizes
+        into a clean LinkedIn /posts/ or /feed/update/ URL.
         """
         if not raw_url:
             return None
 
-        decoded_url = raw_url
-        if "RU=" in raw_url:
-            match = re.search(r'RU=([^/&]+)', raw_url)
+        decoded_url = raw_url.strip()
+
+        # Handle Yahoo RU= redirect wrapper
+        if "RU=" in decoded_url or "ru=" in decoded_url:
+            match = re.search(r'[Rr][Uu]=([^/&]+)', decoded_url)
             if match:
                 decoded_url = urllib.parse.unquote(match.group(1))
 
-        elif "bing.com/ck/" in raw_url or "u=a1" in raw_url:
+        # Handle Bing /ck/ u=a1 base64 redirect wrapper
+        elif "bing.com/ck/" in decoded_url or "u=a1" in decoded_url:
             try:
-                parsed_q = urllib.parse.parse_qs(urllib.parse.urlparse(raw_url).query)
+                parsed_q = urllib.parse.parse_qs(urllib.parse.urlparse(decoded_url).query)
                 u_val = parsed_q.get("u", [""])[0]
                 if u_val:
                     b64_str = u_val[2:] if u_val.startswith("a1") else u_val
                     padding = 4 - (len(b64_str) % 4)
                     if padding != 4:
                         b64_str += "=" * padding
-                    import base64
                     decoded_candidate = base64.b64decode(b64_str).decode("utf-8", errors="ignore")
                     if "linkedin.com" in decoded_candidate:
                         decoded_url = decoded_candidate
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Error decoding Bing redirect URL: %s", e)
 
         return normalize_linkedin_post_url(decoded_url)
+
+    def _recalculate_cached_freshness(self, cached_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Recalculates dynamic age_minutes, age_hours, and posted_time for cached items on read."""
+        for item in cached_items:
+            pub_iso = item.get("published_at")
+            if pub_iso:
+                pub_dt = parse_timestamp(soup_or_str=pub_iso)
+                if pub_dt:
+                    age_res = calculate_age(pub_dt)
+                    if age_res.get("is_valid", True):
+                        item["age_minutes"] = age_res.get("age_minutes", item.get("age_minutes", 0))
+                        item["age_hours"] = age_res.get("age_hours", item.get("age_hours", 0))
+                        item["posted_time"] = age_res.get("age_text", item.get("posted_time", "Recently"))
+        return cached_items
 
     async def search_recruiter_posts_yahoo_async(
         self,
@@ -127,7 +200,7 @@ class LinkedInFinder:
         """
         Asynchronously searches Yahoo for indexed LinkedIn /posts/ URLs.
         """
-        post_urls = []
+        post_urls: List[str] = []
         try:
             url = "https://search.yahoo.com/search"
             start_b = (page - 1) * 10 + 1
@@ -135,17 +208,25 @@ class LinkedInFinder:
             resp = await client.get(url, params=params)
             if resp.status_code == 200:
                 soup = BeautifulSoup(resp.text, "html.parser")
-                for a in soup.find_all("a"):
-                    raw_href = a.get("href", "")
+                for a in soup.find_all("a", href=True):
+                    raw_href = a["href"]
                     clean_href = self.clean_linkedin_url(raw_href)
                     if clean_href and is_valid_linkedin_post_url(clean_href):
                         if clean_href not in post_urls:
                             post_urls.append(clean_href)
-        except Exception:
-            pass
+            else:
+                logger.debug("Yahoo search returned non-200 status %d for query: %s", resp.status_code, query)
+        except Exception as e:
+            logger.debug("Yahoo async search network issue: %s", e)
+
         return post_urls
 
-    def search_recruiter_posts_yahoo(self, query: str, page: int = 1, max_results: int = DEFAULT_MAX_RESULTS) -> List[str]:
+    def search_recruiter_posts_yahoo(
+        self,
+        query: str,
+        page: int = 1,
+        max_results: int = DEFAULT_MAX_RESULTS
+    ) -> List[str]:
         """
         Synchronous helper for search_recruiter_posts_yahoo.
         """
@@ -157,22 +238,23 @@ class LinkedInFinder:
                 resp = client.get(url, params=params)
                 if resp.status_code == 200:
                     soup = BeautifulSoup(resp.text, "html.parser")
-                    post_urls = []
-                    for a in soup.find_all("a"):
-                        raw_href = a.get("href", "")
+                    post_urls: List[str] = []
+                    for a in soup.find_all("a", href=True):
+                        raw_href = a["href"]
                         clean_href = self.clean_linkedin_url(raw_href)
                         if clean_href and is_valid_linkedin_post_url(clean_href):
                             if clean_href not in post_urls:
                                 post_urls.append(clean_href)
                     return post_urls
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Yahoo sync search error: %s", e)
+
         return []
 
     async def search_hiring_posts_async(
-        self, 
-        keywords: str, 
-        location: str = DEFAULT_LOCATION, 
+        self,
+        keywords: str,
+        location: str = DEFAULT_LOCATION,
         timeframe: str = "past-24h",
         remote_only: bool = False,
         max_results: int = DEFAULT_MAX_RESULTS,
@@ -193,25 +275,17 @@ class LinkedInFinder:
 
         max_age_minutes = intent.max_age_minutes
         cache_key = f"hiring_posts::{intent.target_role}::{intent.target_location}::{timeframe}::{remote_only}"
-        
+
+        # 0. Check Cache First
         if not debug:
             cached = self.cache.get(cache_key, timeframe=timeframe)
             if cached is not None and len(cached) > 0:
-                from core.time_utils import calculate_age, parse_timestamp
-                for item in cached:
-                    pub_iso = item.get("published_at")
-                    if pub_iso:
-                        pub_dt = parse_timestamp(soup_or_str=pub_iso)
-                        if pub_dt:
-                            age_res = calculate_age(pub_dt)
-                            if age_res.get("is_valid", True):
-                                item["age_minutes"] = age_res.get("age_minutes", item.get("age_minutes", 0))
-                                item["age_hours"] = age_res.get("age_hours", item.get("age_hours", 0))
-                                item["posted_time"] = age_res.get("age_text", item.get("posted_time", "Recently"))
+                self._recalculate_cached_freshness(cached)
+                logger.info("Serving %d hiring posts from cache for key '%s'", len(cached), cache_key)
                 return cached[:max_results]
 
-        # 1. Primary: Authenticated LinkedIn Session Search (Posts Tab) with safe 6s timeout
-        session_posts = []
+        # 1. Primary Channel: Authenticated LinkedIn Session Search (Posts Tab)
+        session_posts: List[Dict[str, Any]] = []
         try:
             session_posts = await asyncio.wait_for(
                 LinkedInSessionSearch.search_posts_internal_async(
@@ -227,14 +301,27 @@ class LinkedInFinder:
                 timeout=6.0
             )
         except Exception as e:
+            logger.debug("Session search pass finished or timed out (falling back to discovery engines): %s", e)
             session_posts = []
 
         if session_posts:
-            session_posts.sort(key=lambda x: x.get("post_quality_score", 0), reverse=True)
-            self.cache.set(cache_key, session_posts, timeframe=timeframe)
-            return session_posts
+            # Re-rank with candidate profile if available
+            if candidate_profile:
+                session_posts = OpportunityRanker.rank_opportunities(
+                    posts=session_posts,
+                    candidate_profile=candidate_profile,
+                    target_role=intent.target_role,
+                    target_location=intent.target_location,
+                    max_age_minutes=max_age_minutes,
+                    apply_diversity=True
+                )
+            else:
+                session_posts.sort(key=lambda x: x.get("post_quality_score", 0), reverse=True)
 
-        # 2. Fallback: Search Engine Mirror Dorking with async extraction
+            self.cache.set(cache_key, session_posts, timeframe=timeframe)
+            return session_posts[:max_results]
+
+        # 2. Secondary Channel: Search Engine Mirror Dorking with async extraction
         queries = intent.generate_dork_queries(max_queries=5)
         found_urls: List[str] = []
 
@@ -249,29 +336,23 @@ class LinkedInFinder:
                     if len(found_urls) >= max_results * 4:
                         break
 
-        # Zero-Downtime Autonomous Repository — always loaded and merged with web-scraped URLs.
-        # Repository provides a guaranteed pool of verified posts regardless of Yahoo/LinkedIn availability.
+        # 3. Tertiary Channel: Zero-Downtime Autonomous Curated Repository
         from core.live_repository import find_matching_post_records
         repo_records = find_matching_post_records(
             role=intent.target_role,
             location=intent.target_location,
             max_count=max_results * 3
         )
-        # Merge repo URLs with any web-scraped URLs (repo last, so scraped URLs rank higher if present)
         for r in repo_records:
             if r["url"] not in found_urls:
                 found_urls.append(r["url"])
 
-        # Build a lookup by URL for stable pre-verified metadata
         _repo_by_url: Dict[str, Dict[str, Any]] = {r["url"]: r for r in repo_records}
 
-        # Candidate URLs — freshness pre-filter via snowflake ID
-        # Repository posts bypass this filter (their freshness is validated inside extract_batch_async).
-        # Web-scraped URLs are pre-screened to avoid extracting obviously stale posts.
-        fresh_candidate_urls = []
+        # 4. Candidate URLs Freshness Pre-filtering
+        fresh_candidate_urls: List[str] = []
         for post_url in found_urls:
             if post_url in _repo_by_url:
-                # Known repository post — always include; post_extractor validates timestamp
                 fresh_candidate_urls.append(post_url)
                 continue
             snow_dt = extract_snowflake_timestamp(post_url)
@@ -279,16 +360,14 @@ class LinkedInFinder:
                 if is_within_window(snow_dt, max_age_minutes):
                     fresh_candidate_urls.append(post_url)
                 elif not fresh_candidate_urls:
-                    fresh_candidate_urls.append(post_url)  # last-resort fallback
+                    fresh_candidate_urls.append(post_url)
             else:
                 fresh_candidate_urls.append(post_url)
 
-        # Split: known repository posts use pre-verified metadata directly (no re-extraction needed).
-        # Web-scraped URLs go through full extraction with freshness enforcement.
         repo_urls_to_use = [u for u in fresh_candidate_urls if u in _repo_by_url]
         scraped_urls_to_use = [u for u in fresh_candidate_urls if u not in _repo_by_url]
 
-        # Batch-extract web-scraped URLs only (with freshness gate)
+        # 5. Batch Extract in Parallel
         scraped_extracted = []
         if scraped_urls_to_use:
             scraped_extracted = await LinkedInPostExtractor.extract_batch_async(
@@ -300,8 +379,6 @@ class LinkedInFinder:
                 max_age_minutes=max_age_minutes
             )
 
-        # For repo posts: still extract to get hiring_intent + role_match_score,
-        # but with max_age_minutes=None so old-but-valid posts aren't age-rejected.
         repo_extracted = []
         if repo_urls_to_use:
             repo_extracted = await LinkedInPostExtractor.extract_batch_async(
@@ -310,13 +387,13 @@ class LinkedInFinder:
                 skills_taxonomy=self.skills_taxonomy,
                 target_role=intent.target_role,
                 target_location=intent.target_location,
-                max_age_minutes=None  # bypass age gate for curated known posts
+                max_age_minutes=None  # Curated repository posts bypass raw age rejection
             )
 
-        # Merge: repo posts first (pre-curated), then scraped posts
         extracted_posts = list(repo_extracted) + list(scraped_extracted)
 
-        parsed_posts = []
+        # 6. Parse and Build Clean Structured Objects
+        parsed_posts: List[Dict[str, Any]] = []
         for post_data in extracted_posts:
             if not post_data or post_data.get("status") != "success":
                 continue
@@ -329,18 +406,11 @@ class LinkedInFinder:
                 continue
 
             post_url = post_data.get("post_url")
-
-            # Use pre-verified metadata for known repository posts to prevent
-            # inconsistent author/company/location across calls to the same URL.
             repo_meta = _repo_by_url.get(post_url, {})
             stable_author = repo_meta.get("author") or post_data.get("author", "Hiring Recruiter")
             stable_company = repo_meta.get("company") or post_data.get("company", "Hiring Team")
             stable_role = repo_meta.get("role") or post_data.get("job_role", intent.target_role)
-            # primary_location is the purpose-built display field; fall back to extractor location
-            stable_location = (
-                repo_meta.get("primary_location")
-                or post_data.get("location", "Unspecified / Remote")
-            )
+            stable_location = repo_meta.get("primary_location") or post_data.get("location", "Unspecified / Remote")
             stable_work_mode = repo_meta.get("work_mode") or ("Remote" if "remote" in post_data.get("full_post_content", "").lower() else "On-Site")
             stable_emails = repo_meta.get("recruiter_emails") or post_data.get("recruiter_emails", [])
 
@@ -378,9 +448,10 @@ class LinkedInFinder:
                 "raw_snippet": post_data.get("full_post_content", "")[:350]
             })
 
-        from core.ranking import OpportunityRanker
+        # 7. Multi-factor Opportunity Ranking (Quality + ATS Profile Fit)
         ranked_posts = OpportunityRanker.rank_opportunities(
             posts=parsed_posts,
+            candidate_profile=candidate_profile,
             target_role=intent.target_role,
             target_location=intent.target_location,
             max_age_minutes=max_age_minutes,
@@ -394,54 +465,29 @@ class LinkedInFinder:
         return final_posts
 
     def search_hiring_posts(
-        self, 
-        keywords: str, 
-        location: str = DEFAULT_LOCATION, 
+        self,
+        keywords: str,
+        location: str = DEFAULT_LOCATION,
         timeframe: str = "past-24h",
         remote_only: bool = False,
         max_results: int = DEFAULT_MAX_RESULTS,
+        candidate_profile: Optional[Dict[str, Any]] = None,
         debug: bool = False
     ) -> List[Dict[str, Any]]:
         """
-        Synchronous entrypoint for search_hiring_posts.
+        Synchronous entrypoint for search_hiring_posts with safe nested event loop execution.
         """
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import nest_asyncio
-                nest_asyncio.apply()
-                return loop.run_until_complete(
-                    self.search_hiring_posts_async(
-                        keywords=keywords,
-                        location=location,
-                        timeframe=timeframe,
-                        remote_only=remote_only,
-                        max_results=max_results,
-                        debug=debug
-                    )
-                )
-            else:
-                return loop.run_until_complete(
-                    self.search_hiring_posts_async(
-                        keywords=keywords,
-                        location=location,
-                        timeframe=timeframe,
-                        remote_only=remote_only,
-                        max_results=max_results,
-                        debug=debug
-                    )
-                )
-        except Exception:
-            return asyncio.run(
-                self.search_hiring_posts_async(
-                    keywords=keywords,
-                    location=location,
-                    timeframe=timeframe,
-                    remote_only=remote_only,
-                    max_results=max_results,
-                    debug=debug
-                )
+        return _run_async_safely(
+            self.search_hiring_posts_async(
+                keywords=keywords,
+                location=location,
+                timeframe=timeframe,
+                remote_only=remote_only,
+                max_results=max_results,
+                candidate_profile=candidate_profile,
+                debug=debug
             )
+        )
 
     async def search_posts_async(
         self,
@@ -460,23 +506,12 @@ class LinkedInFinder:
             timeframe=date_posted
         )
 
-        max_age_minutes = intent.max_age_minutes
         cache_key = f"search_posts::{intent.target_role}::{date_posted}::{intent.target_location}::{max_results}"
         if not debug:
             cached = self.cache.get(cache_key, timeframe=date_posted)
             if cached is not None and len(cached) > 0:
-                from core.time_utils import calculate_age, parse_timestamp
-                for item in cached:
-                    pub_iso = item.get("published_at")
-                    if pub_iso:
-                        pub_dt = parse_timestamp(soup_or_str=pub_iso)
-                        if pub_dt:
-                            age_res = calculate_age(pub_dt)
-                            if age_res.get("is_valid", True):
-                                item["age_minutes"] = age_res.get("age_minutes", item.get("age_minutes", 0))
-                                item["age_hours"] = age_res.get("age_hours", item.get("age_hours", 0))
-                                item["posted_time"] = age_res.get("age_text", item.get("posted_time", "Recently"))
-                return cached
+                self._recalculate_cached_freshness(cached)
+                return cached[:max_results]
 
         session_results = await LinkedInSessionSearch.search_posts_internal_async(
             keywords=intent.target_role,
@@ -490,7 +525,7 @@ class LinkedInFinder:
         if session_results:
             session_results.sort(key=lambda x: x.get("post_quality_score", 0), reverse=True)
             self.cache.set(cache_key, session_results, timeframe=date_posted)
-            return session_results
+            return session_results[:max_results]
 
         return await self.search_hiring_posts_async(
             keywords=keywords,
@@ -509,39 +544,14 @@ class LinkedInFinder:
         debug: bool = False
     ) -> List[Dict[str, Any]]:
         """
-        Synchronous entrypoint for search_posts.
+        Synchronous entrypoint for search_posts with safe nested event loop execution.
         """
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import nest_asyncio
-                nest_asyncio.apply()
-                return loop.run_until_complete(
-                    self.search_posts_async(
-                        keywords=keywords,
-                        date_posted=date_posted,
-                        max_results=max_results,
-                        location=location,
-                        debug=debug
-                    )
-                )
-            else:
-                return loop.run_until_complete(
-                    self.search_posts_async(
-                        keywords=keywords,
-                        date_posted=date_posted,
-                        max_results=max_results,
-                        location=location,
-                        debug=debug
-                    )
-                )
-        except Exception:
-            return asyncio.run(
-                self.search_posts_async(
-                    keywords=keywords,
-                    date_posted=date_posted,
-                    max_results=max_results,
-                    location=location,
-                    debug=debug
-                )
+        return _run_async_safely(
+            self.search_posts_async(
+                keywords=keywords,
+                date_posted=date_posted,
+                max_results=max_results,
+                location=location,
+                debug=debug
             )
+        )

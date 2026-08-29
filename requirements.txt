@@ -1,10 +1,24 @@
+# Model Context Protocol (MCP) Core SDK
 mcp>=1.0.0,<2.0.0
+
+# PDF & HTML Parsing
 pypdf>=4.0.0
 beautifulsoup4>=4.12.0
+lxml>=5.0.0
+
+# HTTP Networking & Search Engines
 httpx>=0.27.0
 duckduckgo-search>=6.0.0
-python-dotenv>=1.0.0
+requests>=2.31.0
+
+# Async Event Loop Utilities
+nest-asyncio>=1.6.0
+
+# Data Validation & Environment
 pydantic>=2.0.0
+python-dotenv>=1.0.0
+
+# Web API Framework & ASGI Server
 fastapi>=0.110.0
-uvicorn>=0.28.0
+uvicorn[standard]>=0.28.0
 python-multipart>=0.0.9

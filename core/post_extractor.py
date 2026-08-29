@@ -1,34 +1,79 @@
-import re
+"""
+core/post_extractor.py
+======================
+Production-grade Asynchronous & Synchronous LinkedIn Post Intelligence Extractor.
+
+Features:
+- Validates exact publication timestamp down to the minute via snowflake ID and DOM attributes.
+- Directional hiring intent classification with spam & job-seeker negative filters.
+- Smart entity extraction: Recruiter emails, phone numbers, tech skills, company name, location, and CTC / salary budget.
+- Multi-channel personalized outreach pitch suite with 1-click mailto/Gmail/Outlook deep links.
+- Connection pooling, rate-limit backoff, bounded async batch extraction, and structured logging.
+"""
+
 import asyncio
-from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime, timezone
-import httpx
-from bs4 import BeautifulSoup
-import sys
+import logging
 from pathlib import Path
+import re
+import sys
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
+
+from bs4 import BeautifulSoup
+import httpx
 
 # Add root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import COMMON_SKILLS, ErrorCodes, MAX_POST_PAYLOAD_BYTES
-from core.linkedin_urls import is_valid_linkedin_post_url, normalize_linkedin_post_url
-from core.time_utils import (
-    parse_timestamp,
-    calculate_age,
-    is_within_window,
-    get_max_age_minutes,
-    FRESHNESS_WINDOWS
-)
 from core.hiring_intent import (
-    JobRoleExtractor,
-    HiringIntentClassifier,
-    RoleRelevanceMatcher,
-    LocationRelevanceMatcher,
     ExperienceRelevanceMatcher,
-    QualityScorer
+    HiringIntentClassifier,
+    JobRoleExtractor,
+    LocationRelevanceMatcher,
+    QualityScorer,
+    RoleRelevanceMatcher,
 )
+from core.linkedin_urls import (
+    extract_activity_id,
+    extract_author_handle,
+    is_valid_linkedin_post_url,
+    normalize_linkedin_post_url,
+)
+from core.matcher import JobMatcher, canonicalize_skill
 from core.pitch_generator import OutreachPitchGenerator
-from core.matcher import JobMatcher
+from core.time_utils import (
+    FRESHNESS_WINDOWS,
+    calculate_age,
+    extract_snowflake_timestamp,
+    get_max_age_minutes,
+    is_within_window,
+    parse_timestamp,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _run_async_safely(coro):
+    """Safely executes an async coroutine across sync / nested event loops."""
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    if loop.is_running():
+        try:
+            import nest_asyncio
+            nest_asyncio.apply()
+            return loop.run_until_complete(coro)
+        except Exception:
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(lambda: asyncio.run(coro))
+                return future.result()
+    else:
+        return loop.run_until_complete(coro)
 
 
 class LinkedInPostExtractor:
@@ -42,20 +87,24 @@ class LinkedInPostExtractor:
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
+            "Chrome/126.0.0.0 Safari/537.36"
         ),
-        "Accept": (
-            "text/html,application/xhtml+xml,application/xml;"
-            "q=0.9,image/webp,*/*;q=0.8"
-        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
+        "DNT": "1",
+        "Upgrade-Insecure-Requests": "1",
     }
 
-    TIMEOUT_CONFIG = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=10.0)
+    TIMEOUT_CONFIG = httpx.Timeout(connect=5.0, read=8.0, write=5.0, pool=8.0)
     MAX_CONCURRENCY = 5
 
-    EMAIL_REGEX = r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+"
-    PHONE_REGEX = r"(?:\+91[\-\s]?)?[6789]\d{9}"
+    EMAIL_REGEX = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", re.IGNORECASE)
+    PHONE_REGEX = re.compile(r"(?:\+91[\-\s]?)?[6789]\d{9}\b")
+    SALARY_REGEX = re.compile(
+        r"(?:(?:ctc|salary|budget|package|stipend|compensation)\s*:\s*|₹|\$|INR\s*)"
+        r"([0-9.,]+\s*(?:lpa|lakhs?|lac|k|m|per\s+month|per\s+annum|usd|inr)?(?:\s*-\s*[0-9.,]+\s*(?:lpa|lakhs?|lac|k|m)?)?)",
+        re.IGNORECASE
+    )
 
     @staticmethod
     def is_valid_post_url(url: str) -> bool:
@@ -63,82 +112,64 @@ class LinkedInPostExtractor:
 
     @staticmethod
     def normalize_skills(skills: List[str]) -> List[str]:
-        mapping = {
-            "react.js": "React",
-            "reactjs": "React",
-            "react": "React",
-            "node.js": "Node.js",
-            "nodejs": "Node.js",
-            "express.js": "Express.js",
-            "expressjs": "Express.js",
-            "express": "Express.js",
-            "next.js": "Next.js",
-            "nextjs": "Next.js",
-            "vue.js": "Vue.js",
-            "vuejs": "Vue.js",
-            "angular.js": "Angular",
-            "angularjs": "Angular",
-            "tailwindcss": "Tailwind CSS",
-            "tailwind": "Tailwind CSS",
-            "mongodb": "MongoDB",
-            "postgresql": "PostgreSQL",
-            "postgres": "PostgreSQL",
-            "mysql": "MySQL",
-            "fastapi": "FastAPI",
-            "django": "Django",
-            "flask": "Flask",
-            "typescript": "TypeScript",
-            "javascript": "JavaScript",
-            "python": "Python",
-            "docker": "Docker",
-            "kubernetes": "Kubernetes",
-            "git": "Git",
-        }
-
-        normalized = set()
+        """Normalizes and canonicalizes extracted skill tokens."""
+        if not skills:
+            return []
+        normalized: Set[str] = set()
         for skill in skills:
-            clean = skill.strip().lower()
-            if clean in mapping:
-                normalized.add(mapping[clean])
-            else:
-                normalized.add(skill.strip().title())
+            if not skill:
+                continue
+            canon = canonicalize_skill(skill)
+            if canon:
+                normalized.add(canon.title())
         return sorted(normalized)
 
     @staticmethod
+    def extract_salary(text: str) -> Optional[str]:
+        """Extracts compensation / CTC / salary range if explicitly mentioned in text."""
+        if not text:
+            return None
+        match = LinkedInPostExtractor.SALARY_REGEX.search(text)
+        if match:
+            raw = match.group(0).strip()
+            if len(raw) >= 3 and not raw.isdigit():
+                return raw
+        return None
+
+    @staticmethod
     def extract_company(text: str, emails: List[str], author: str) -> str:
+        """Extracts the company or organization name with priority email domain mapping."""
+        # 1. Email domain inspection
         for email in emails:
             try:
                 domain = email.split("@")[1].lower()
                 company_part = domain.split(".")[0]
                 if company_part not in [
-                    "gmail",
-                    "yahoo",
-                    "outlook",
-                    "hotmail",
-                    "protonmail",
-                    "icloud",
-                    "mail",
-                    "rediffmail",
-                ]:
+                    "gmail", "yahoo", "outlook", "hotmail", "protonmail",
+                    "icloud", "mail", "rediffmail", "zoho", "yandex"
+                ] and len(company_part) >= 3:
                     return company_part.capitalize()
             except Exception:
                 pass
 
-        GENERIC_BLACKLIST = [
+        GENERIC_BLACKLIST = {
             "offer", "ux designers", "implement", "collaborate", "hiring", "immediate",
             "team", "experienced", "candidates", "developer", "engineer", "designers",
-            "jobs", "process", "recruitment", "recruiting", "profile"
-        ]
+            "jobs", "process", "recruitment", "recruiting", "profile", "talent",
+            "technologies", "software", "opportunity", "solutions"
+        }
 
-        if author and author not in ["Hiring Manager / Recruiter", "LinkedIn Member", "Recruiter"]:
+        # 2. Author affiliation (@ Company or at Company)
+        if author and author not in ["Hiring Manager / Recruiter", "LinkedIn Member", "Recruiter", "Hiring Team"]:
             match = re.search(r"(?:at|@)\s+([A-Za-z0-9\s&.-]+)", author)
             if match:
                 clean_name = match.group(1).strip()
-                if len(clean_name) > 2 and not any(b in clean_name.lower() for b in GENERIC_BLACKLIST):
+                if len(clean_name) > 2 and clean_name.lower() not in GENERIC_BLACKLIST:
                     return clean_name.title()
 
+        # 3. Text heuristic patterns
         patterns = [
-            r"(?:hiring|looking\s+for|join|at|with)\s+(?:our\s+team\s+at\s+)?([A-Z][A-Za-z0-9&.\s]{2,25}(?:Pvt|Ltd|Inc|LLC|Technologies|Solutions|Software|Labs|Studio|Media|Corp|Systems|AI|Health)?)",
+            r"(?:hiring\s+for|join|at|with)\s+(?:our\s+team\s+at\s+)?([A-Z][A-Za-z0-9&.\s]{2,25}(?:Pvt|Ltd|Inc|LLC|Technologies|Solutions|Software|Labs|Studio|Media|Corp|Systems|AI|Health)?)",
             r"(?:company|organization)\s*:\s*([A-Za-z0-9&.\s]{2,25})",
         ]
         for p in patterns:
@@ -151,16 +182,14 @@ class LinkedInPostExtractor:
                     extracted,
                     flags=re.IGNORECASE,
                 ).strip()
-                if len(extracted) >= 3 and not any(
-                    x in extracted.lower()
-                    for x in GENERIC_BLACKLIST
-                ):
+                if len(extracted) >= 3 and extracted.lower() not in GENERIC_BLACKLIST:
                     return extracted.title()
 
         return "Hiring Team"
 
     @staticmethod
     def extract_location(text: str) -> str:
+        """Extracts normalized job location from post text."""
         KNOWN_LOCATIONS = [
             "Bangalore", "Bengaluru", "Chennai", "Hyderabad", "Pune", "Mumbai",
             "Delhi", "Gurgaon", "Gurugram", "Noida", "Coimbatore", "Kochi",
@@ -200,7 +229,7 @@ class LinkedInPostExtractor:
         cand_skills: List[str],
     ) -> Dict[str, Any]:
         """
-        Pure deterministic parsing logic on downloaded HTML.
+        Pure deterministic parsing logic on downloaded LinkedIn HTML.
         """
         soup = BeautifulSoup(html_text, "html.parser")
 
@@ -240,6 +269,9 @@ class LinkedInPostExtractor:
         title_str = og_title.get("content", "").strip() if og_title else ""
         full_text = og_desc.get("content", "").strip() if og_desc else soup.get_text(" ", strip=True)
 
+        # Sanitize Unicode spaces and quotes
+        full_text = full_text.replace("\xa0", " ").replace("\u200b", "").strip()
+
         author = "Hiring Manager / Recruiter"
         m_auth = re.search(r"^([^:|]+?)\s+on\s+LinkedIn", title_str, re.IGNORECASE)
         if m_auth:
@@ -254,6 +286,12 @@ class LinkedInPostExtractor:
                     if sub_m:
                         author = sub_m.group(1).strip()
                         break
+
+        # Fallback author handle from URL
+        if author in ["Hiring Manager / Recruiter", "LinkedIn Member"]:
+            handle = extract_author_handle(norm_url)
+            if handle:
+                author = handle.replace("-", " ").title()
 
         # 3. Hiring Intent Classification & Spam Filter
         intent_res = HiringIntentClassifier.classify(
@@ -291,11 +329,12 @@ class LinkedInPostExtractor:
                 "error": "Post is non-hiring content (advice, tutorial, webinar, or discussion)."
             }
 
-        # Emails & Phones
-        emails = sorted(set(re.findall(cls.EMAIL_REGEX, full_text)))
-        phones = sorted(set(re.findall(cls.PHONE_REGEX, full_text)))
+        # 4. Contacts & Entities Extraction
+        emails = sorted(set(cls.EMAIL_REGEX.findall(full_text)))
+        phones = sorted(set(cls.PHONE_REGEX.findall(full_text)))
+        salary_str = cls.extract_salary(full_text)
 
-        # Skills
+        # 5. Skills Extraction
         text_lower = (full_text + " " + title_str).lower()
         raw_skills = []
         for skill in skills_taxonomy:
@@ -303,15 +342,16 @@ class LinkedInPostExtractor:
                 raw_skills.append(skill)
         skills = cls.normalize_skills(raw_skills)
 
-        # Company & Location
+        # 6. Company, Location & Roles
         company = cls.extract_company(full_text, emails, author)
         location = cls.extract_location(full_text)
-
-        # Roles
-        extracted_roles = JobRoleExtractor.extract_roles(full_text, default_title=title_str.split("|")[0].strip() if title_str else "Software Engineer")
+        extracted_roles = JobRoleExtractor.extract_roles(
+            full_text,
+            default_title=title_str.split("|")[0].strip() if title_str else "Software Engineer"
+        )
         role = extracted_roles[0] if extracted_roles else "Software Engineer"
 
-        # 4. Relevance Scoring & Post Quality
+        # 7. Relevance Scoring & Quality
         resolved_target_role = target_role or role
         resolved_target_loc = target_location or "India"
 
@@ -325,7 +365,10 @@ class LinkedInPostExtractor:
         role_reason = role_match_res["reason"]
 
         loc_match_res = LocationRelevanceMatcher.match(resolved_target_loc, location, full_text)
-        exp_match_res = ExperienceRelevanceMatcher.match(candidate_exp_years if isinstance(candidate_exp_years, int) else 2, full_text)
+        exp_match_res = ExperienceRelevanceMatcher.match(
+            candidate_exp_years if isinstance(candidate_exp_years, int) else 2,
+            full_text
+        )
 
         quality_score = QualityScorer.calculate_quality_score(
             hiring_confidence=intent_res.get("confidence", 0.8),
@@ -339,7 +382,7 @@ class LinkedInPostExtractor:
             has_apply_link=True
         )
 
-        # 5. Resume Match & Outreach Pitches
+        # 8. Resume Match & Multi-Persona Outreach Pitches
         match_data = {}
         pitch_skills = skills
         if cand_skills:
@@ -358,9 +401,10 @@ class LinkedInPostExtractor:
             candidate_name=candidate_name,
             candidate_exp_years=candidate_exp_years if isinstance(candidate_exp_years, int) else 2,
             recipient_name=author,
+            recipient_email=emails[0] if emails else None,
         )
 
-        result = {
+        result: Dict[str, Any] = {
             "status": "success",
             "post_url": norm_url,
             "published_at": published_at.isoformat(),
@@ -379,6 +423,7 @@ class LinkedInPostExtractor:
             "role_match_reason": role_reason,
             "experience_match_score": exp_match_res.get("score", 75),
             "experience_fit": exp_match_res.get("fit", "UNKNOWN"),
+            "salary_range": salary_str or "Competitive / Disclosed in post",
             "hiring_intent": intent_res.get("intent", "HIRING"),
             "hiring_confidence": intent_res.get("confidence", 0.9),
             "hiring_signals": intent_res.get("signals", []),
@@ -427,6 +472,7 @@ class LinkedInPostExtractor:
                     "reason": "INVALID_TIMEFRAME",
                     "error": f"Invalid timeframe '{timeframe}'."
                 }
+
         norm_url = normalize_linkedin_post_url(url)
         if not norm_url:
             return {
@@ -469,6 +515,7 @@ class LinkedInPostExtractor:
                     if attempt < max_attempts - 1:
                         await asyncio.sleep(0.5)
                         continue
+                    logger.debug("Network timeout on URL '%s': %s", norm_url, net_err)
                     return {
                         "status": "error",
                         "reason": "NETWORK_TIMEOUT",
@@ -509,6 +556,7 @@ class LinkedInPostExtractor:
             )
 
         except Exception as e:
+            logger.debug("Post extractor parsing error on '%s': %s", norm_url, e)
             return {
                 "status": "error",
                 "reason": "PARSER_ERROR",
@@ -537,8 +585,8 @@ class LinkedInPostExtractor:
             return []
 
         # Deduplicate input URLs while preserving order
-        seen = set()
-        deduped_urls = []
+        seen: Set[str] = set()
+        deduped_urls: List[str] = []
         for u in urls:
             norm = normalize_linkedin_post_url(u) or u
             if norm not in seen:
@@ -546,8 +594,8 @@ class LinkedInPostExtractor:
                 deduped_urls.append(norm)
 
         sem = asyncio.Semaphore(max_concurrency)
-
         limits = httpx.Limits(max_keepalive_connections=20, max_connections=30)
+
         async with httpx.AsyncClient(
             headers=cls.HEADERS,
             timeout=cls.TIMEOUT_CONFIG,
@@ -570,8 +618,7 @@ class LinkedInPostExtractor:
             tasks = [sem_task(u) for u in deduped_urls]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            # Error isolation: replace unhandled exceptions with error dicts
-            cleaned_results = []
+            cleaned_results: List[Dict[str, Any]] = []
             for idx, res in enumerate(results):
                 if isinstance(res, Exception):
                     cleaned_results.append({
@@ -599,77 +646,18 @@ class LinkedInPostExtractor:
         candidate_profile: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        Synchronous entrypoint. Preserves backward compatibility.
+        Synchronous entrypoint. Preserves backward compatibility and safe async execution.
         """
-        if timeframe and not max_age_minutes:
-            try:
-                max_age_minutes = get_max_age_minutes(timeframe)
-            except ValueError:
-                return {
-                    "status": "rejected",
-                    "reason": "INVALID_TIMEFRAME",
-                    "error": f"Invalid timeframe '{timeframe}'."
-                }
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Running inside existing event loop (e.g. FastAPI / Jupyter)
-                # Use synchronous httpx.Client to prevent blocking the async event loop
-                norm_url = normalize_linkedin_post_url(url)
-                if not norm_url:
-                    return {
-                        "status": "rejected",
-                        "reason": "NOT_A_LINKEDIN_POST",
-                        "error": f"Rejected URL '{url}'. OpenFinder strictly supports ONLY genuine LinkedIn /posts/ URLs.",
-                    }
-
-                skills_taxonomy = skills_taxonomy or COMMON_SKILLS
-                if candidate_profile:
-                    candidate_name = candidate_profile.get("candidate_name", candidate_name)
-                    candidate_exp_years = candidate_profile.get("years_of_experience", candidate_exp_years)
-                    cand_skills = candidate_profile.get("top_skills", [])
-                    target_role = target_role or candidate_profile.get("primary_role")
-                else:
-                    cand_skills = []
-
-                with httpx.Client(headers=cls.HEADERS, timeout=cls.TIMEOUT_CONFIG, follow_redirects=True) as client:
-                    resp = client.get(norm_url)
-                    if resp.status_code != 200:
-                        return {"status": "error", "reason": "FETCH_FAILED", "error": f"HTTP {resp.status_code}"}
-                    return cls._parse_html_to_post_data(
-                        html_text=resp.text,
-                        norm_url=norm_url,
-                        skills_taxonomy=skills_taxonomy,
-                        max_age_minutes=max_age_minutes,
-                        target_role=target_role,
-                        target_location=target_location,
-                        candidate_name=candidate_name,
-                        candidate_exp_years=candidate_exp_years,
-                        cand_skills=cand_skills
-                    )
-            else:
-                return loop.run_until_complete(
-                    cls.extract_from_url_async(
-                        url=url,
-                        skills_taxonomy=skills_taxonomy,
-                        candidate_name=candidate_name,
-                        candidate_exp_years=candidate_exp_years,
-                        target_role=target_role,
-                        target_location=target_location,
-                        max_age_minutes=max_age_minutes,
-                        candidate_profile=candidate_profile
-                    )
-                )
-        except RuntimeError:
-            return asyncio.run(
-                cls.extract_from_url_async(
-                    url=url,
-                    skills_taxonomy=skills_taxonomy,
-                    candidate_name=candidate_name,
-                    candidate_exp_years=candidate_exp_years,
-                    target_role=target_role,
-                    target_location=target_location,
-                    max_age_minutes=max_age_minutes,
-                    candidate_profile=candidate_profile
-                )
+        return _run_async_safely(
+            cls.extract_from_url_async(
+                url=url,
+                skills_taxonomy=skills_taxonomy,
+                candidate_name=candidate_name,
+                candidate_exp_years=candidate_exp_years,
+                target_role=target_role,
+                target_location=target_location,
+                max_age_minutes=max_age_minutes,
+                timeframe=timeframe,
+                candidate_profile=candidate_profile
             )
+        )

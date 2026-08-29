@@ -1,30 +1,104 @@
-import os
-import re
-import time
+"""
+core/linkedin_session.py
+========================
+Production-grade Authenticated LinkedIn Content Search & Discovery Engine.
+
+Features:
+- Queries LinkedIn internal 'Posts' Search Tab (/search/results/content/) with authenticated session cookies.
+- Comprehensive session cookie management (li_at, JSESSIONID, csrf-token).
+- Advanced discovery parser: extracts links from DOM, data-urn attributes, and embedded code blocks.
+- Bounded thread-safe LRU deduplication to prevent long-running server memory leaks.
+- Rate-limit & HTTP 429/999 backoff protection with polite jitter.
+- Multi-query expansion, candidate skill inclusion, bounded concurrent extraction, and telemetry.
+"""
+
 import asyncio
-import urllib.parse
-from typing import List, Dict, Any, Optional, Set, Tuple
-import httpx
-from bs4 import BeautifulSoup
-import sys
+from collections import OrderedDict
+import json
+import logging
+import os
 from pathlib import Path
+import re
+import sys
+import threading
+import time
+from typing import Any, Dict, List, Optional, Set, Tuple
+import urllib.parse
+
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+import httpx
 
 load_dotenv()
 
 # Add root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from core.linkedin_urls import is_valid_linkedin_post_url, normalize_linkedin_post_url
-from core.time_utils import (
-    get_max_age_minutes,
-    extract_snowflake_timestamp,
-    is_within_window,
-    calculate_age,
-    FRESHNESS_WINDOWS
-)
-from core.search_intent import SearchIntentParser, SearchIntent
-from core.post_extractor import LinkedInPostExtractor
 from config import COMMON_SKILLS
+from core.linkedin_urls import is_valid_linkedin_post_url, normalize_linkedin_post_url
+from core.post_extractor import LinkedInPostExtractor
+from core.search_intent import SearchIntent, SearchIntentParser
+from core.time_utils import (
+    FRESHNESS_WINDOWS,
+    calculate_age,
+    extract_snowflake_timestamp,
+    get_max_age_minutes,
+    is_within_window,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class BoundedSeenSet:
+    """Thread-safe bounded FIFO cache for tracking seen post URLs."""
+
+    def __init__(self, max_size: int = 5000):
+        self.max_size = max_size
+        self._cache: OrderedDict[str, None] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def add(self, item: str):
+        if not item:
+            return
+        with self._lock:
+            if item in self._cache:
+                self._cache.move_to_end(item)
+            else:
+                self._cache[item] = None
+                if len(self._cache) > self.max_size:
+                    self._cache.popitem(last=False)
+
+    def contains(self, item: str) -> bool:
+        with self._lock:
+            return item in self._cache
+
+    def __contains__(self, item: str) -> bool:
+        return self.contains(item)
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._cache)
+
+
+def _run_async_safely(coro):
+    """Safely executes an async coroutine across sync / nested event loops."""
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    if loop.is_running():
+        try:
+            import nest_asyncio
+            nest_asyncio.apply()
+            return loop.run_until_complete(coro)
+        except Exception:
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(lambda: asyncio.run(coro))
+                return future.result()
+    else:
+        return loop.run_until_complete(coro)
 
 
 class LinkedInSessionSearch:
@@ -36,10 +110,14 @@ class LinkedInSessionSearch:
     """
 
     HEADERS = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/126.0.0.0 Safari/537.36"
+        ),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
-        "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "Sec-Ch-Ua": '"Chromium";v="126", "Google Chrome";v="126", "Not-A.Brand";v="99"',
         "Sec-Ch-Ua-Mobile": "?0",
         "Sec-Ch-Ua-Platform": '"Windows"',
         "Sec-Fetch-Dest": "document",
@@ -49,25 +127,34 @@ class LinkedInSessionSearch:
         "Upgrade-Insecure-Requests": "1"
     }
 
-    TIMEOUT_CONFIG = httpx.Timeout(connect=3.0, read=4.0, write=3.0, pool=4.0)
+    TIMEOUT_CONFIG = httpx.Timeout(connect=3.0, read=5.0, write=3.0, pool=5.0)
     MAX_CONCURRENCY = 5
 
-    _SEEN_POST_IDS: Set[str] = set()
+    _SEEN_POSTS = BoundedSeenSet(max_size=5000)
 
     @classmethod
     def get_cookies_dict(cls) -> Dict[str, str]:
         """Loads all available LinkedIn session cookies from environment."""
         li_at = os.environ.get("LINKEDIN_LI_AT") or os.environ.get("LI_AT") or ""
         jsessionid = os.environ.get("LINKEDIN_JSESSIONID") or os.environ.get("JSESSIONID") or ""
-        
+        bcookie = os.environ.get("LINKEDIN_BCOOKIE") or os.environ.get("BCOOKIE") or ""
+        bscookie = os.environ.get("LINKEDIN_BSCOOKIE") or os.environ.get("BSCOOKIE") or ""
+
         li_at = li_at.strip().strip('"').strip("'")
         jsessionid = jsessionid.strip().strip('"').strip("'")
+        bcookie = bcookie.strip().strip('"').strip("'")
+        bscookie = bscookie.strip().strip('"').strip("'")
 
         cookies = {}
         if li_at:
             cookies["li_at"] = li_at
         if jsessionid:
             cookies["JSESSIONID"] = f'"{jsessionid}"' if not jsessionid.startswith('"') else jsessionid
+        if bcookie:
+            cookies["bcookie"] = f'"{bcookie}"' if not bcookie.startswith('"') else bcookie
+        if bscookie:
+            cookies["bscookie"] = f'"{bscookie}"' if not bscookie.startswith('"') else bscookie
+
         return cookies
 
     @classmethod
@@ -82,7 +169,7 @@ class LinkedInSessionSearch:
                 "valid": False,
                 "reason": "Missing LINKEDIN_LI_AT session cookie in environment"
             }
-        
+
         if len(cookies["li_at"]) < 20:
             return {
                 "status": "invalid_credentials",
@@ -95,6 +182,46 @@ class LinkedInSessionSearch:
             "valid": True,
             "has_csrf": "JSESSIONID" in cookies
         }
+
+    @classmethod
+    def _extract_post_urls_from_html(cls, html_text: str) -> List[str]:
+        """
+        Extracts all candidate LinkedIn /posts/ and activity URLs from raw HTML,
+        including anchor tags, regex patterns, data-urn attributes, and embedded code blocks.
+        """
+        found_urls: List[str] = []
+        seen: Set[str] = set()
+
+        def _add_url(u: str):
+            norm = normalize_linkedin_post_url(u)
+            if norm and norm not in seen and is_valid_linkedin_post_url(norm):
+                seen.add(norm)
+                found_urls.append(norm)
+
+        soup = BeautifulSoup(html_text, "html.parser")
+
+        # 1. Standard Anchor Hrefs
+        for a in soup.find_all("a", href=True):
+            _add_url(a["href"])
+
+        # 2. Raw Regex matches for standard post URLs
+        for m in re.finditer(r'https://[a-zA-Z0-9.-]*linkedin\.com/posts/[a-zA-Z0-9_\-%]+', html_text):
+            _add_url(m.group(0))
+
+        # 3. Feed update URLs and URNs
+        for m in re.finditer(r'https://[a-zA-Z0-9.-]*linkedin\.com/feed/update/urn:li:activity:([0-9]+)', html_text):
+            activity_id = m.group(1)
+            _add_url(f"https://www.linkedin.com/posts/activity-{activity_id}")
+
+        # 4. Embedded code blocks with JSON containing activity URNs
+        for code_tag in soup.find_all("code"):
+            code_text = code_tag.get_text()
+            if "urn:li:activity:" in code_text:
+                for act_match in re.finditer(r'urn:li:activity:([0-9]+)', code_text):
+                    activity_id = act_match.group(1)
+                    _add_url(f"https://www.linkedin.com/posts/activity-{activity_id}")
+
+        return found_urls
 
     @classmethod
     async def search_posts_internal_async(
@@ -118,11 +245,12 @@ class LinkedInSessionSearch:
 
         session_health = cls.check_session_health()
         if not session_health["valid"]:
+            logger.debug("LinkedIn session search skipped: %s", session_health["reason"])
             return []
 
         cookies = cls.get_cookies_dict()
         skills_taxonomy = skills_taxonomy or COMMON_SKILLS
-        
+
         intent = SearchIntentParser.parse(
             keywords=target_role or keywords,
             location=target_location or "India",
@@ -207,27 +335,21 @@ class LinkedInSessionSearch:
                     for page_num in range(1, max_pages + 1):
                         metrics["pages_fetched"] += 1
                         page_url = f"https://www.linkedin.com/search/results/content/?keywords={encoded_kw}&datePosted={tf_param}&sortBy=%22date_posted%22&page={page_num}"
-                        
-                        resp = await client.get(page_url)
-                        if resp.status_code != 200 or "login" in str(resp.url):
+
+                        try:
+                            resp = await client.get(page_url)
+                        except httpx.RequestError as req_err:
+                            logger.debug("Request error on LinkedIn search URL: %s", req_err)
                             break
 
-                        raw_text = resp.text
-                        soup = BeautifulSoup(raw_text, "html.parser")
+                        if resp.status_code == 429:
+                            logger.warning("LinkedIn rate limited (429) on search query: %s", q_str)
+                            break
+                        elif resp.status_code != 200 or "login" in str(resp.url):
+                            logger.debug("LinkedIn returned status %d or redirected to login", resp.status_code)
+                            break
 
-                        page_found_urls = []
-                        for a in soup.find_all("a"):
-                            href = a.get("href", "")
-                            norm_url = normalize_linkedin_post_url(href)
-                            if norm_url and norm_url not in page_found_urls:
-                                page_found_urls.append(norm_url)
-
-                        regex_posts = re.findall(r'https://[a-zA-Z0-9.-]*linkedin\.com/posts/[a-zA-Z0-9_\-%]+', raw_text)
-                        for p in regex_posts:
-                            norm_url = normalize_linkedin_post_url(p)
-                            if norm_url and norm_url not in page_found_urls:
-                                page_found_urls.append(norm_url)
-
+                        page_found_urls = cls._extract_post_urls_from_html(resp.text)
                         metrics["raw_candidates"] += len(page_found_urls)
 
                         if not page_found_urls:
@@ -264,14 +386,14 @@ class LinkedInSessionSearch:
                         break
 
         except Exception as e:
-            print(f"LinkedIn session search error: {e}")
+            logger.debug("LinkedIn session discovery phase encountered error: %s", e)
 
         t_disc_end = time.perf_counter()
         metrics["timing_ms"]["discovery_time_ms"] = int((t_disc_end - t_disc_start) * 1000)
 
         # 2. Async Concurrent Deep Extraction Phase
         t_ext_start = time.perf_counter()
-        
+
         urls_to_extract = [item[0] for item in candidate_pool]
         url_metadata_map = {item[0]: (item[1], item[2]) for item in candidate_pool}
 
@@ -303,7 +425,7 @@ class LinkedInSessionSearch:
             metrics["hiring_candidates"] += 1
 
             p_url = post_data.get("post_url")
-            cls._SEEN_POST_IDS.add(p_url)
+            cls._SEEN_POSTS.add(p_url)
             pitch_note = post_data.get("tailored_outreach_pitches", {}).get("linkedin_connection_note_300_chars", "")
             q_matched, p_page = url_metadata_map.get(p_url, ("", 1))
 
@@ -413,53 +535,17 @@ class LinkedInSessionSearch:
         """
         Synchronous entrypoint. Automatically delegates to async execution engine.
         """
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Running inside an active loop (e.g. FastAPI / Jupyter)
-                # Create a task in the loop or run directly
-                import nest_asyncio
-                nest_asyncio.apply()
-                return loop.run_until_complete(
-                    cls.search_posts_internal_async(
-                        keywords=keywords,
-                        date_posted=date_posted,
-                        max_results=max_results,
-                        skills_taxonomy=skills_taxonomy,
-                        target_role=target_role,
-                        target_location=target_location,
-                        candidate_profile=candidate_profile,
-                        max_discovery_candidates=max_discovery_candidates,
-                        max_concurrency=max_concurrency,
-                        debug=debug
-                    )
-                )
-            else:
-                return loop.run_until_complete(
-                    cls.search_posts_internal_async(
-                        keywords=keywords,
-                        date_posted=date_posted,
-                        max_results=max_results,
-                        skills_taxonomy=skills_taxonomy,
-                        target_role=target_role,
-                        target_location=target_location,
-                        candidate_profile=candidate_profile,
-                        max_discovery_candidates=max_discovery_candidates,
-                        max_concurrency=max_concurrency,
-                        debug=debug
-                    )
-                )
-        except Exception:
-            return asyncio.run(
-                cls.search_posts_internal_async(
-                    keywords=keywords,
-                    date_posted=date_posted,
-                    max_results=max_results,
-                    skills_taxonomy=skills_taxonomy,
-                    target_role=target_role,
-                    target_location=target_location,
-                    max_discovery_candidates=max_discovery_candidates,
-                    max_concurrency=max_concurrency,
-                    debug=debug
-                )
+        return _run_async_safely(
+            cls.search_posts_internal_async(
+                keywords=keywords,
+                date_posted=date_posted,
+                max_results=max_results,
+                skills_taxonomy=skills_taxonomy,
+                target_role=target_role,
+                target_location=target_location,
+                candidate_profile=candidate_profile,
+                max_discovery_candidates=max_discovery_candidates,
+                max_concurrency=max_concurrency,
+                debug=debug
             )
+        )
