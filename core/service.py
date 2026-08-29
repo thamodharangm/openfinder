@@ -691,9 +691,11 @@ class OpenFinderService:
                 continue
             seen_keys.add(dedupe_key)
 
-            snippet_text = p.get("raw_text") or p.get("snippet") or p.get("title") or ""
+            snippet_text = p.get("full_post_content") or p.get("raw_text") or p.get("snippet") or p.get("title") or ""
             author_title = p.get("author_title") or p.get("author_headline") or ""
             author_name = p.get("author") or ""
+            role_val = p.get("role") or p.get("job_role") or p.get("title") or roles_list[0]
+            p["role"] = role_val
 
             intent_eval = HiringIntentScorer.evaluate(snippet_text, author_title, author_name)
             p["hiring_intent_score"] = intent_eval.score
@@ -701,7 +703,7 @@ class OpenFinderService:
             p["intent_signals"] = intent_eval.signals
             p["is_hiring_intent"] = intent_eval.is_hiring_intent
 
-            category = p.get("role") or roles_list[0]
+            category = role_val
             yield_tracker.record_query(
                 query=f"{category} in {p.get('location', 'India')}",
                 category=category,
@@ -723,6 +725,22 @@ class OpenFinderService:
 
             p["is_live_post"] = True
             p["source_type"] = "Live LinkedIn Post"
+
+            # Auto-generate 1-click recruiter outreach pitch suite if emails are extracted
+            if p.get("recruiter_emails") and not p.get("tailored_outreach_pitches"):
+                try:
+                    p["tailored_outreach_pitches"] = OutreachPitchGenerator.generate_suite(
+                        job_title=role_val,
+                        company_name=p.get("company", "Hiring Team"),
+                        matched_skills=p.get("skills", []),
+                        candidate_name=resolved_profile.get("candidate_name", "Candidate") if resolved_profile else "Candidate",
+                        candidate_exp_years=resolved_profile.get("years_of_experience", 2) if resolved_profile else 2,
+                        recipient_name=p.get("author", "Hiring Team"),
+                        recipient_email=p["recruiter_emails"][0]
+                    )
+                except Exception:
+                    pass
+
             verified_hiring_posts.append(p)
 
         # Wave 2: Adaptive Dynamic Keyword Expansion (if target not yet reached and time budget remains)
@@ -761,9 +779,11 @@ class OpenFinderService:
                         continue
                     seen_keys.add(dedupe_key)
 
-                    snippet_text = p.get("raw_text") or p.get("snippet") or p.get("title") or ""
+                    snippet_text = p.get("full_post_content") or p.get("raw_text") or p.get("snippet") or p.get("title") or ""
                     author_title = p.get("author_title") or p.get("author_headline") or ""
                     author_name = p.get("author") or ""
+                    role_val = p.get("role") or p.get("job_role") or p.get("title") or roles_list[0]
+                    p["role"] = role_val
 
                     intent_eval = HiringIntentScorer.evaluate(snippet_text, author_title, author_name)
                     p["hiring_intent_score"] = intent_eval.score
@@ -785,6 +805,21 @@ class OpenFinderService:
 
                     p["is_live_post"] = True
                     p["source_type"] = "Live LinkedIn Post"
+
+                    if p.get("recruiter_emails") and not p.get("tailored_outreach_pitches"):
+                        try:
+                            p["tailored_outreach_pitches"] = OutreachPitchGenerator.generate_suite(
+                                job_title=role_val,
+                                company_name=p.get("company", "Hiring Team"),
+                                matched_skills=p.get("skills", []),
+                                candidate_name=resolved_profile.get("candidate_name", "Candidate") if resolved_profile else "Candidate",
+                                candidate_exp_years=resolved_profile.get("years_of_experience", 2) if resolved_profile else 2,
+                                recipient_name=p.get("author", "Hiring Team"),
+                                recipient_email=p["recruiter_emails"][0]
+                            )
+                        except Exception:
+                            pass
+
                     verified_hiring_posts.append(p)
 
         # Fallback blend if verified count is low

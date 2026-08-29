@@ -587,28 +587,29 @@ class LinkedInFinder:
         async with httpx.AsyncClient(headers=self.headers, timeout=timeout, follow_redirects=True) as client:
             async def _fetch_page(query: str, page_num: int):
                 async with semaphore:
-                    offset = (page_num - 1) * 10 + 1
                     try:
-                        urls = await self._search_yahoo_async(client, query, count=10, offset=offset)
+                        urls = await self.search_recruiter_posts_yahoo_async(
+                            query=query,
+                            client=client,
+                            page=page_num,
+                            max_results=10
+                        )
                         return urls
                     except Exception as e:
                         logger.debug("Harvest page fetch error for query '%s' page %d: %s", query, page_num, e)
                         return []
 
             fetch_coroutines = []
-            hiring_keywords = [
-                '"we are hiring"',
-                'hiring',
-                '"looking for"',
-                '"send resume"',
-                '"immediate hiring"'
-            ]
-
             for role in clean_roles[:4]:
                 for loc in clean_locs[:4]:
-                    for hk in hiring_keywords[:2]:
-                        dork = f'site:linkedin.com/posts {hk} "{role}" {loc}'
-                        for p in range(1, max(1, min(max_pages, 5)) + 1):
+                    dork_variations = [
+                        f'site:linkedin.com/posts/ "{role}" {loc} "email"',
+                        f'site:linkedin.com/posts/ {role} {loc} hiring',
+                        f'site:linkedin.com/posts/ "{role}" {loc}',
+                        f'site:linkedin.com/posts/ {role} {loc} "we are hiring"'
+                    ]
+                    for dork in dork_variations[:2]:
+                        for p in range(1, max(1, min(max_pages, 4)) + 1):
                             fetch_coroutines.append(_fetch_page(dork, p))
 
             page_results = await asyncio.gather(*fetch_coroutines, return_exceptions=True)
@@ -648,11 +649,14 @@ class LinkedInFinder:
 
         # Concurrently extract post details with bounded batch extraction
         harvested_posts = await LinkedInPostExtractor.extract_batch_async(
-            all_found_urls[:target_count * 2],
-            max_workers=min(concurrency_limit, 12)
+            urls=all_found_urls[:target_count * 2],
+            max_concurrency=min(concurrency_limit, 10),
+            skills_taxonomy=self.skills_taxonomy,
+            target_role=clean_roles[0],
+            target_location=clean_locs[0] if clean_locs else "India"
         )
 
-        return harvested_posts
+        return [p for p in harvested_posts if isinstance(p, dict) and p.get("status") != "error"]
 
     def harvest_query_matrix(
         self,
