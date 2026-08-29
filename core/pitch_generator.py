@@ -9,6 +9,11 @@ class OutreachPitchGenerator:
     with 1-click 'Open in Mail' (mailto / Gmail deep link) actions.
     """
 
+    @classmethod
+    def generate_all(cls, *args, **kwargs) -> Dict[str, Any]:
+        """Alias for generate_suite."""
+        return cls.generate_suite(*args, **kwargs)
+
     @staticmethod
     def generate_suite(
         job_title: str,
