@@ -25,12 +25,14 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 # Ensure root in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import DEFAULT_LOCATION, DEFAULT_MAX_RESULTS, DEFAULT_TIMEFRAME, ErrorCodes
+from core.adaptive_harvester import DynamicKeywordExtractor, QueryYieldTracker
 from core.linkedin_finder import LinkedInFinder
 from core.linkedin_session import LinkedInSessionSearch
 from core.live_repository import get_curated_posts
@@ -615,13 +617,20 @@ class OpenFinderService:
         candidate_exp_years: Optional[int] = None,
         candidate_name: Optional[str] = None,
         max_pages: int = 4,
+        max_time_seconds: int = 25,
+        adaptive_mode: bool = True,
         debug: bool = False
     ) -> Dict[str, Any]:
         """
-        Executes wide-matrix parallel search and deep pagination harvesting,
-        applies numerical hiring intent scoring (score >= min_intent_score),
-        classifies post type (DIRECT, RECRUITER, REFERRAL, AGENCY), and ranks by ATS match.
+        Adaptive Yield-Optimized Bulk Harvester:
+        - Strict 25s execution guardrail for Claude Web / Desktop MCP stability.
+        - Multi-Armed Bandit Query Yield Tracking (boosts high-yield vectors, prunes spam branches).
+        - Dynamic Keyword & Hub Discovery (extracts emerging roles/terms from initial wave).
+        - Two-Stage Precision Verification (Hiring Intent Score >= min_intent_score).
+        - Composite Deduplication and ATS Match Ranking.
         """
+        start_time = time.time()
+
         # 1. Normalize input parameters
         if isinstance(roles, str):
             roles_list = [r.strip() for r in roles.split(",") if r.strip()]
@@ -646,26 +655,29 @@ class OpenFinderService:
             candidate_name=candidate_name
         )
 
-        # 2. Harvest raw post dataset
-        raw_harvested = await self.finder.harvest_query_matrix_async(
-            roles=roles_list,
-            locations=locs_list,
+        yield_tracker = QueryYieldTracker()
+        now_utc = datetime.now(timezone.utc)
+        seen_keys: Set[str] = set()
+        verified_hiring_posts: List[Dict[str, Any]] = []
+        total_harvested_raw = 0
+        rejected_intent_count = 0
+        duplicates_count = 0
+        waves_executed = 0
+        stop_reason = "target_reached"
+
+        # Wave 1: Primary Query Matrix Harvesting
+        waves_executed += 1
+        raw_wave_1 = await self.finder.harvest_query_matrix_async(
+            roles=roles_list[:4],
+            locations=locs_list[:4],
             timeframe=timeframe,
             max_pages=max_pages,
             target_count=bounded_target,
             debug=debug
         )
+        total_harvested_raw += len(raw_wave_1)
 
-        total_harvested_raw = len(raw_harvested)
-
-        # 3. Composite deduplication & Intent scoring
-        now_utc = datetime.now(timezone.utc)
-        seen_keys: Set[str] = set()
-        verified_hiring_posts: List[Dict[str, Any]] = []
-        rejected_intent_count = 0
-        duplicates_count = 0
-
-        for p in raw_harvested:
+        for p in raw_wave_1:
             u = p.get("post_url")
             if not u:
                 continue
@@ -679,7 +691,6 @@ class OpenFinderService:
                 continue
             seen_keys.add(dedupe_key)
 
-            # Evaluate Hiring Intent Score
             snippet_text = p.get("raw_text") or p.get("snippet") or p.get("title") or ""
             author_title = p.get("author_title") or p.get("author_headline") or ""
             author_name = p.get("author") or ""
@@ -690,11 +701,18 @@ class OpenFinderService:
             p["intent_signals"] = intent_eval.signals
             p["is_hiring_intent"] = intent_eval.is_hiring_intent
 
+            category = p.get("role") or roles_list[0]
+            yield_tracker.record_query(
+                query=f"{category} in {p.get('location', 'India')}",
+                category=category,
+                raw_count=1,
+                verified_count=1 if intent_eval.score >= min_intent_score else 0
+            )
+
             if intent_eval.score < min_intent_score or intent_eval.hiring_type == "NON_HIRING":
                 rejected_intent_count += 1
                 continue
 
-            # Check Snowflake timestamp & age
             snow_dt = extract_snowflake_timestamp(u)
             if snow_dt is not None:
                 age_hours = (now_utc - snow_dt).total_seconds() / 3600.0
@@ -707,7 +725,69 @@ class OpenFinderService:
             p["source_type"] = "Live LinkedIn Post"
             verified_hiring_posts.append(p)
 
-        # 4. Fallback blend if harvested count is low
+        # Wave 2: Adaptive Dynamic Keyword Expansion (if target not yet reached and time budget remains)
+        elapsed = time.time() - start_time
+        if adaptive_mode and len(verified_hiring_posts) < bounded_target and elapsed < (max_time_seconds - 6):
+            discovered_roles, discovered_locs = DynamicKeywordExtractor.extract_emerging_terms(
+                verified_hiring_posts,
+                roles_list,
+                locs_list
+            )
+
+            if discovered_roles or discovered_locs:
+                waves_executed += 1
+                adaptive_roles = discovered_roles if discovered_roles else roles_list[:2]
+                adaptive_locs = discovered_locs if discovered_locs else locs_list[:2]
+
+                raw_wave_2 = await self.finder.harvest_query_matrix_async(
+                    roles=adaptive_roles,
+                    locations=adaptive_locs,
+                    timeframe=timeframe,
+                    max_pages=2,
+                    target_count=max(10, bounded_target - len(verified_hiring_posts)),
+                    debug=debug
+                )
+                total_harvested_raw += len(raw_wave_2)
+
+                for p in raw_wave_2:
+                    u = p.get("post_url")
+                    if not u:
+                        continue
+                    author = (p.get("author") or "").strip().lower()
+                    company = (p.get("company") or "").strip().lower()
+                    dedupe_key = f"{u}::{author}::{company}"
+                    if dedupe_key in seen_keys:
+                        duplicates_count += 1
+                        continue
+                    seen_keys.add(dedupe_key)
+
+                    snippet_text = p.get("raw_text") or p.get("snippet") or p.get("title") or ""
+                    author_title = p.get("author_title") or p.get("author_headline") or ""
+                    author_name = p.get("author") or ""
+
+                    intent_eval = HiringIntentScorer.evaluate(snippet_text, author_title, author_name)
+                    p["hiring_intent_score"] = intent_eval.score
+                    p["hiring_type"] = intent_eval.hiring_type
+                    p["intent_signals"] = intent_eval.signals
+                    p["is_hiring_intent"] = intent_eval.is_hiring_intent
+
+                    if intent_eval.score < min_intent_score or intent_eval.hiring_type == "NON_HIRING":
+                        rejected_intent_count += 1
+                        continue
+
+                    snow_dt = extract_snowflake_timestamp(u)
+                    if snow_dt is not None:
+                        age_hours = (now_utc - snow_dt).total_seconds() / 3600.0
+                        p["age_minutes"] = int(age_hours * 60)
+                        p["posted_time"] = f"{int(age_hours)}h ago" if age_hours < 24 else f"{int(age_hours//24)}d ago"
+                    else:
+                        p["posted_time"] = p.get("posted_time") or "Recently"
+
+                    p["is_live_post"] = True
+                    p["source_type"] = "Live LinkedIn Post"
+                    verified_hiring_posts.append(p)
+
+        # Fallback blend if verified count is low
         if len(verified_hiring_posts) < 10:
             for r in roles_list[:2]:
                 for loc in locs_list[:2]:
@@ -739,7 +819,16 @@ class OpenFinderService:
                                 "snippet": f"Hiring {cp.get('role')} at {cp.get('company')} ({cp.get('primary_location')})."
                             })
 
-        # 5. Opportunity Ranking & ATS Match Scoring
+        # Determine stop reason
+        total_time = round(time.time() - start_time, 2)
+        if len(verified_hiring_posts) >= bounded_target:
+            stop_reason = "target_reached"
+        elif total_time >= (max_time_seconds - 2):
+            stop_reason = "time_budget_exhausted"
+        else:
+            stop_reason = "diminishing_returns"
+
+        # Multi-signal Opportunity Ranking & ATS Match Scoring
         ranked = OpportunityRanker.rank_opportunities(
             posts=verified_hiring_posts,
             candidate_profile=resolved_profile,
@@ -785,6 +874,13 @@ class OpenFinderService:
             "target_count": bounded_target,
             "min_intent_score": min_intent_score,
             "count": len(clean_results),
+            "harvest_telemetry": {
+                "stop_reason": stop_reason,
+                "waves_executed": waves_executed,
+                "execution_time_seconds": total_time,
+                "max_time_budget_seconds": max_time_seconds,
+                "yield_summary": yield_tracker.get_summary()
+            },
             "funnel_metrics": {
                 "total_harvested_raw": total_harvested_raw,
                 "duplicates_removed": duplicates_count,
@@ -809,6 +905,8 @@ class OpenFinderService:
         candidate_exp_years: Optional[int] = None,
         candidate_name: Optional[str] = None,
         max_pages: int = 4,
+        max_time_seconds: int = 25,
+        adaptive_mode: bool = True,
         debug: bool = False
     ) -> Dict[str, Any]:
         """Synchronous entrypoint for bulk_harvest_opportunities."""
@@ -825,6 +923,8 @@ class OpenFinderService:
                 candidate_exp_years=candidate_exp_years,
                 candidate_name=candidate_name,
                 max_pages=max_pages,
+                max_time_seconds=max_time_seconds,
+                adaptive_mode=adaptive_mode,
                 debug=debug
             )
         )

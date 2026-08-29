@@ -371,6 +371,16 @@ TOOLS = [
                     "description": "Minimum numerical hiring intent score threshold 0-100 (default: 60)",
                     "default": 60
                 },
+                "max_time_seconds": {
+                    "type": "integer",
+                    "description": "Maximum execution time budget in seconds (default: 25)",
+                    "default": 25
+                },
+                "adaptive_mode": {
+                    "type": "boolean",
+                    "description": "Enable autonomous keyword & location discovery wave (default: true)",
+                    "default": True
+                },
                 "candidate_profile_id": {
                     "type": "string",
                     "description": "Optional stored candidate profile ID for ATS scoring"
@@ -498,6 +508,8 @@ async def handle_tool(name: str, args: Dict[str, Any]) -> str:
             timeframe=args.get("timeframe", "past-7d"),
             target_count=int(args.get("target_count", 50)),
             min_intent_score=int(args.get("min_intent_score", 60)),
+            max_time_seconds=int(args.get("max_time_seconds", 25)),
+            adaptive_mode=bool(args.get("adaptive_mode", True)),
             candidate_profile_id=args.get("candidate_profile_id")
         )
         return json.dumps(res, ensure_ascii=False, indent=2)

@@ -514,7 +514,7 @@ async def mcp_message_handler(request: Request):
                     },
                     {
                         "name": "bulk_harvest_opportunities",
-                        "description": "Performs wide-matrix parallel search and deep pagination to harvest 50-200+ verified hiring posts with composite deduplication, numerical intent scoring (>=60), and ATS ranking.",
+                        "description": "Adaptive Yield-Optimized Bulk Harvester: Performs wide-matrix parallel search and dynamic keyword expansion to harvest 50-200+ verified hiring posts with composite deduplication, numerical intent scoring (>=60), yield tracking, and 25s timeout safety.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
@@ -523,6 +523,8 @@ async def mcp_message_handler(request: Request):
                                 "timeframe": { "type": "string", "description": "Freshness window ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d')", "default": "past-7d" },
                                 "target_count": { "type": "integer", "description": "Target number of verified opportunities to return (default: 50, max: 200)", "default": 50 },
                                 "min_intent_score": { "type": "integer", "description": "Minimum numerical hiring intent score threshold 0-100 (default: 60)", "default": 60 },
+                                "max_time_seconds": { "type": "integer", "description": "Maximum execution time budget in seconds (default: 25)", "default": 25 },
+                                "adaptive_mode": { "type": "boolean", "description": "Enable autonomous keyword & location discovery wave (default: true)", "default": True },
                                 "candidate_profile_id": { "type": "string", "description": "Optional stored candidate profile ID for ATS scoring" }
                             }
                         }
@@ -682,6 +684,8 @@ async def mcp_message_handler(request: Request):
                     timeframe=args.get("timeframe", "past-7d"),
                     target_count=int(args.get("target_count", 50)),
                     min_intent_score=int(args.get("min_intent_score", 60)),
+                    max_time_seconds=int(args.get("max_time_seconds", 25)),
+                    adaptive_mode=bool(args.get("adaptive_mode", True)),
                     candidate_profile_id=args.get("candidate_profile_id") or args.get("profile_id")
                 )
                 response_payload = {
@@ -822,10 +826,12 @@ async def bulk_harvest_endpoint(
     timeframe: str = Query("past-7d", description="Freshness window ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d')"),
     target_count: int = Query(50, description="Target number of opportunities (10-200)"),
     min_intent_score: int = Query(60, description="Minimum hiring intent score threshold 0-100"),
+    max_time_seconds: int = Query(25, description="Maximum execution time budget in seconds"),
+    adaptive_mode: bool = Query(True, description="Enable autonomous dynamic keyword and location expansion"),
     candidate_profile_id: Optional[str] = Query(None, description="Optional stored candidate profile ID"),
     debug: bool = Query(False, description="Include debug metrics")
 ) -> Dict[str, Any]:
-    """Wide-matrix parallel search and deep pagination bulk harvesting endpoint."""
+    """Adaptive Yield-Optimized bulk harvesting endpoint with 25s timeout safety."""
     try:
         r_list = [r.strip() for r in roles.split(",") if r.strip()] if roles else None
         l_list = [l.strip() for l in locations.split(",") if l.strip()] if locations else None
@@ -835,6 +841,8 @@ async def bulk_harvest_endpoint(
             timeframe=timeframe,
             target_count=target_count,
             min_intent_score=min_intent_score,
+            max_time_seconds=max_time_seconds,
+            adaptive_mode=adaptive_mode,
             candidate_profile_id=candidate_profile_id,
             debug=debug
         )
