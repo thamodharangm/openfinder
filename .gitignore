@@ -44,4 +44,7 @@ Thumbs.db
 # Temp data
 data/*.json
 data/*.db
+data/*.db*
 *.db
+*.db*
+

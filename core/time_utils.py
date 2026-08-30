@@ -335,14 +335,41 @@ def is_within_window(
 
 def calculate_freshness_score(age_minutes: int, max_age_minutes: int = 1440) -> int:
     """
-    Computes a linear decay freshness score from 100 (freshly posted) down to 0 (at window edge).
+    Computes an explainable non-linear half-life freshness score from 100 down to 0.
+    Recruiter responsiveness is highest in the first 4 hours (golden window).
+    - < 60 mins: 95-100
+    - 1h - 4h: 85-94
+    - 4h - 12h: 70-84
+    - 12h - 24h: 50-69
+    - 24h+: smooth asymptotic decay capped at 0
     """
     if age_minutes < 0:
         return 0
     if max_age_minutes <= 0:
         return 50
-    ratio = max(0.0, 1.0 - (age_minutes / max_age_minutes))
-    return int(round(ratio * 100))
+
+    # Non-linear piecewise curve with exponential damping
+    if age_minutes <= 60:
+        # 100 down to 95 for first hour
+        return int(round(100 - (age_minutes / 60.0) * 5))
+    elif age_minutes <= 240:
+        # 95 down to 85 for 1-4 hours
+        frac = (age_minutes - 60) / 180.0
+        return int(round(95 - frac * 10))
+    elif age_minutes <= 720:
+        # 85 down to 70 for 4-12 hours
+        frac = (age_minutes - 240) / 480.0
+        return int(round(85 - frac * 15))
+    elif age_minutes <= max_age_minutes:
+        # 70 down to 30 at window limit
+        frac = (age_minutes - 720) / max(1.0, float(max_age_minutes - 720))
+        return int(round(70 - frac * 40))
+    else:
+        # Beyond window edge
+        over = age_minutes - max_age_minutes
+        decay = max(0, int(round(30 * (0.5 ** (over / 1440.0)))))
+        return max(0, min(decay, 30))
+
 
 
 def format_age(age_minutes: int) -> str:

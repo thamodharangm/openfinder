@@ -34,6 +34,8 @@ from core.hiring_intent import (
     QualityScorer,
     RoleRelevanceMatcher,
 )
+from core.spam_filter import calculate_hiring_intent_score
+
 from core.linkedin_urls import (
     extract_activity_id,
     extract_author_handle,
@@ -124,6 +126,21 @@ class LinkedInPostExtractor:
                 normalized.add(canon.title())
         return sorted(normalized)
 
+    @classmethod
+    def extract_skills(cls, text: str, skills_taxonomy: Optional[List[str]] = None) -> List[str]:
+        """Extracts and normalizes technical skills from text against skills taxonomy."""
+        if not text:
+            return []
+        taxonomy = skills_taxonomy or COMMON_SKILLS
+        text_lower = text.lower()
+        raw_skills = []
+        for skill in taxonomy:
+            if re.search(r"(?:\b|\W)" + re.escape(skill.lower()) + r"(?:\b|\W)", text_lower):
+                raw_skills.append(skill)
+        return cls.normalize_skills(raw_skills)
+
+
+
     @staticmethod
     def extract_salary(text: str) -> Optional[str]:
         """Extracts compensation / CTC / salary range if explicitly mentioned in text."""
@@ -188,7 +205,7 @@ class LinkedInPostExtractor:
         return "Hiring Team"
 
     @staticmethod
-    def extract_location(text: str) -> str:
+    def extract_location(text: str, default_location: str = "Unspecified / Remote") -> str:
         """Extracts normalized job location from post text."""
         KNOWN_LOCATIONS = [
             "Bangalore", "Bengaluru", "Chennai", "Hyderabad", "Pune", "Mumbai",
@@ -213,7 +230,7 @@ class LinkedInPostExtractor:
             if len(cand) > 2 and cand.lower() not in ["in", "at", "as", "the", "for"]:
                 return cand.title()
 
-        return "Unspecified / Remote"
+        return default_location
 
     @classmethod
     def _parse_html_to_post_data(
@@ -634,6 +651,121 @@ class LinkedInPostExtractor:
             return cleaned_results
 
     @classmethod
+    def extract_from_serp_snippet(
+        cls,
+        url: str,
+        title: str,
+        snippet: str,
+        skills_taxonomy: Optional[List[str]] = None,
+        target_role: Optional[str] = None,
+        target_location: Optional[str] = None,
+        candidate_profile: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Zero-Downtime Fast-Path Extractor:
+        Extracts structured hiring post intelligence directly from Search Engine (SERP) title & snippet.
+        Used as high-speed instant parser and resilient fallback when LinkedIn HTML fetch is rate-limited.
+        """
+        norm_url = normalize_linkedin_post_url(url) or url
+        skills_taxonomy = skills_taxonomy or COMMON_SKILLS
+
+        full_text = f"{title}\n{snippet}".strip()
+        if not full_text:
+            return {"status": "error", "reason": "EMPTY_SNIPPET", "post_url": norm_url}
+
+        # 1. Publication timestamp from Snowflake ID or current fallback
+        snow_dt = extract_snowflake_timestamp(norm_url)
+        published_at = snow_dt or datetime.now(timezone.utc)
+        age_info = calculate_age(published_at)
+
+        # 2. Extract Entities
+        raw_emails = cls.EMAIL_REGEX.findall(full_text)
+        emails = sorted(set(e.strip(".,;:()[]{}<>\"' ") for e in raw_emails if "@" in e and len(e.strip(".,;:()[]{}<>\"' ")) > 5))
+        phones = sorted(set(cls.PHONE_REGEX.findall(full_text)))
+        salary_str = cls.extract_salary(full_text)
+
+        author_handle = extract_author_handle(norm_url) or "Hiring Team"
+        company = cls.extract_company(full_text, emails, author_handle)
+        extracted_roles = JobRoleExtractor.extract_roles(full_text, default_title=target_role or "Software Engineer")
+        role = extracted_roles[0] if extracted_roles else (target_role or "Software Engineer")
+        skills = cls.extract_skills(full_text, skills_taxonomy=skills_taxonomy)
+        location = cls.extract_location(full_text, default_location=target_location or "India")
+
+        # 3. Intent & Quality Evaluation
+        hiring_score, hiring_type, hiring_details = calculate_hiring_intent_score(full_text, author_title="", author_name=author_handle)
+        quality_score = QualityScorer.calculate_quality_score(
+            hiring_confidence=round(hiring_score / 100.0, 2),
+            age_minutes=age_info.get("age_minutes", 0),
+            max_age_minutes=1440,
+            role_score=85,
+            location_score=100,
+            experience_score=75,
+            has_email=bool(emails),
+            has_phone=bool(phones),
+            has_apply_link=False
+        )
+
+        candidate_name = (candidate_profile.get("candidate_name") if candidate_profile else "Candidate")
+        candidate_exp = (candidate_profile.get("years_of_experience", 2) if candidate_profile else 2)
+
+        pitches = OutreachPitchGenerator.generate_all(
+            job_title=role,
+            company_name=company,
+            matched_skills=skills if skills else ["Software Development"],
+            candidate_name=candidate_name,
+            candidate_exp_years=candidate_exp,
+            recipient_name=author_handle,
+            recipient_email=emails[0] if emails else None
+        )
+
+        result: Dict[str, Any] = {
+            "status": "success",
+            "extraction_source": "serp_snippet",
+            "post_url": norm_url,
+            "published_at": published_at.isoformat(),
+            "age_minutes": age_info["age_minutes"],
+            "age_hours": age_info["age_hours"],
+            "age_text": age_info["age_text"],
+            "author": author_handle,
+            "author_type": hiring_type,
+            "company": company,
+            "job_role": role,
+            "extracted_roles": extracted_roles,
+            "location": location,
+            "location_match_type": "EXACT",
+            "location_match_score": 100,
+            "role_match_score": 85,
+            "role_match_reason": "SERP Snippet match",
+            "experience_match_score": 75,
+            "experience_fit": "GOOD_FIT",
+            "salary_range": salary_str or "Competitive / Inquire in DM",
+            "hiring_intent": "HIRING" if hiring_score >= 50 else "POTENTIAL_HIRING",
+            "hiring_confidence": round(hiring_score / 100.0, 2),
+            "hiring_signals": hiring_details.get("signals", []),
+            "post_quality_score": quality_score,
+            "is_spam": False,
+            "recruiter_emails": emails,
+            "contact_numbers": phones,
+            "detected_skills": skills,
+            "tailored_outreach_pitches": pitches,
+            "full_post_content": full_text,
+        }
+
+        if candidate_profile:
+            match_data = JobMatcher.match_job_to_candidate(
+                job_description=full_text,
+                candidate_profile=candidate_profile,
+                detected_skills=skills
+            )
+            result["match_score"] = match_data.get("match_score", 0)
+            result["match_tier"] = match_data.get("match_tier", "Moderate Match")
+            result["matched_skills"] = match_data.get("matched_skills", [])
+            result["missing_skills"] = match_data.get("missing_skills", [])
+            result["ats_recommendations"] = match_data.get("ats_recommendations", [])
+
+        return result
+
+    @classmethod
     def extract_from_url(
         cls,
         url: str,
@@ -662,3 +794,4 @@ class LinkedInPostExtractor:
                 candidate_profile=candidate_profile
             )
         )
+

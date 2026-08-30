@@ -48,7 +48,7 @@ class SearchIntent:
     def generate_dork_queries(self, max_queries: int = 6) -> List[str]:
         """
         Generates precision search engine mirror dorks targeting ONLY site:linkedin.com/posts.
-        Uses high-recall natural queries and quoted variants for maximum discovery.
+        Injects boolean negative operators to exclude job seeker spam and engagement-bait directly at search level.
         """
         loc_str = ""
         if self.remote_only:
@@ -57,21 +57,22 @@ class SearchIntent:
             loc_str = f" {self.target_location}"
 
         p_role = self.target_role.replace('"', '').strip()
+        neg_filter = '-("open to work" OR "looking for job" OR "actively looking" OR "seeking new opportunity")'
 
         queries: List[str] = [
-            f'site:linkedin.com/posts hiring {p_role}{loc_str}'.strip(),
+            f'site:linkedin.com/posts hiring {p_role}{loc_str} {neg_filter}'.strip(),
+            f'site:linkedin.com/posts "{p_role}" "we are hiring"{loc_str} {neg_filter}'.strip(),
+            f'site:linkedin.com/posts {p_role} "send resume"{loc_str} {neg_filter}'.strip(),
+            f'site:linkedin.com/posts "{p_role}" "immediate opening"{loc_str} {neg_filter}'.strip(),
             f'site:linkedin.com/posts {p_role} hiring{loc_str}'.strip(),
-            f'site:linkedin.com/posts "{p_role}" "we are hiring"{loc_str}'.strip(),
-            f'site:linkedin.com/posts {p_role} "send resume"{loc_str}'.strip(),
-            f'site:linkedin.com/posts "{p_role}" "drop resume"{loc_str}'.strip(),
         ]
 
         if self.role_variants and len(self.role_variants) > 1:
             v_role = self.role_variants[1].replace('"', '').strip()
-            queries.insert(1, f'site:linkedin.com/posts hiring {v_role}{loc_str}'.strip())
+            queries.insert(1, f'site:linkedin.com/posts hiring {v_role}{loc_str} {neg_filter}'.strip())
 
         if self.candidate_exp_years <= 1:
-            queries.insert(2, f'site:linkedin.com/posts {p_role} (fresher OR "entry level" OR intern){loc_str}'.strip())
+            queries.insert(2, f'site:linkedin.com/posts {p_role} (fresher OR "entry level" OR intern){loc_str} {neg_filter}'.strip())
 
         seen: Set[str] = set()
         deduped: List[str] = []

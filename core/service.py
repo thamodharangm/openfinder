@@ -1033,3 +1033,88 @@ class OpenFinderService:
                 debug=debug
             )
         )
+
+    async def prewarm_cache_async(
+        self,
+        roles: Optional[List[str]] = None,
+        locations: Optional[List[str]] = None,
+        timeframe: str = "past-24h",
+        max_posts_per_target: int = 15
+    ) -> Dict[str, Any]:
+        """
+        Asynchronously pre-warms SQLite cache and curated repository for high-frequency queries.
+        """
+        from core.adaptive_harvester import BackgroundPrewarmer
+        return await BackgroundPrewarmer.prewarm_async(
+            roles=roles,
+            locations=locations,
+            timeframe=timeframe,
+            max_posts_per_target=max_posts_per_target
+        )
+
+    def prewarm_cache(
+        self,
+        roles: Optional[List[str]] = None,
+        locations: Optional[List[str]] = None,
+        timeframe: str = "past-24h",
+        max_posts_per_target: int = 15
+    ) -> Dict[str, Any]:
+        """
+        Synchronous entrypoint for prewarm_cache.
+        """
+        return _run_async_safely(
+            self.prewarm_cache_async(
+                roles=roles,
+                locations=locations,
+                timeframe=timeframe,
+                max_posts_per_target=max_posts_per_target
+            )
+        )
+
+    async def classify_hiring_post_async(
+        self,
+        text: str,
+        author: str = "",
+        url: str = "",
+        target_role: Optional[str] = None,
+        target_location: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Asynchronously classifies post text using AI Hiring Intent Classifier with SQLite persistence.
+        """
+        from core.ai_classifier import AIHiringIntentClassifier
+        classifier = AIHiringIntentClassifier()
+        res = await classifier.classify_async(
+            text=text,
+            author=author,
+            url=url,
+            target_role=target_role,
+            target_location=target_location
+        )
+        return {
+            "status": "success",
+            "classification": res.to_dict()
+        }
+
+    def classify_hiring_post(
+        self,
+        text: str,
+        author: str = "",
+        url: str = "",
+        target_role: Optional[str] = None,
+        target_location: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Synchronous entrypoint for classify_hiring_post.
+        """
+        return _run_async_safely(
+            self.classify_hiring_post_async(
+                text=text,
+                author=author,
+                url=url,
+                target_role=target_role,
+                target_location=target_location
+            )
+        )
+
+

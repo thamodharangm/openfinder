@@ -82,10 +82,12 @@ class SpamClassifier:
 
     # 3. Job Seeker Reverse-Outreach (Candidate looking for job, not recruiter)
     _JOB_SEEKER_PATTERNS = [
-        re.compile(r'\b(?:actively\s+looking|seeking\s+new|open\s+to\s+work|looking\s+for\s+(?:a\s+)?(?:job|opportunity|role|internship))\b', re.IGNORECASE),
-        re.compile(r'\b(?:laid\s+off|recently\s+graduated\s+and\s+looking|available\s+for\s+immediate\s+joining)\b', re.IGNORECASE),
-        re.compile(r'\b(?:please\s+refer\s+me|any\s+leads\s+appreciated|help\s+me\s+find|review\s+my\s+profile)\b', re.IGNORECASE),
-        re.compile(r'\b(?:here\s+is\s+my\s+resume|attaching\s+my\s+resume\s+for\s+reference)\b', re.IGNORECASE),
+        re.compile(r'\b(?:actively\s+looking|seeking\s+new|open\s+to\s+work|looking\s+for\s+(?:a\s+)?(?:job|opportunity|role|internship|position|openings))\b', re.IGNORECASE),
+        re.compile(r'\b(?:laid\s+off|recently\s+graduated\s+and\s+looking|available\s+for\s+immediate\s+joining|ready\s+to\s+join\s+immediately)\b', re.IGNORECASE),
+        re.compile(r'\b(?:please\s+refer\s+me|any\s+leads\s+appreciated|help\s+me\s+find|review\s+my\s+profile|share\s+my\s+resume|need\s+referral)\b', re.IGNORECASE),
+        re.compile(r'\b(?:here\s+is\s+my\s+resume|attaching\s+my\s+resume\s+for\s+reference|sharing\s+my\s+updated\s+resume|my\s+portfolio\s+link\s+below)\b', re.IGNORECASE),
+        re.compile(r'\b(?:i\s+am\s+looking\s+for|i\'m\s+seeking|completed\s+my\s+b\.?tech\s+looking|fresher\s+looking\s+for)\b', re.IGNORECASE),
+        re.compile(r'#opentowork|#jobseeker|#lookingforjob|#needjob|#readytowork|#hireme', re.IGNORECASE),
     ]
 
     # 4. Scams, MLMs & Unrealistic Schemes
@@ -264,9 +266,9 @@ class HiringIntentScorer:
     """
 
     _HIRING_VERBS = [
-        re.compile(r'\b(?:we\s+are\s+hiring|urgently\s+hiring|hiring\s+for|open\s+position|join\s+our\s+team|developer\s+required|walk-?in\s+drive|immediate\s+hiring|we\'re\s+looking\s+for)\b', re.IGNORECASE),
-        re.compile(r'\b(?:looking\s+for\s+(?:a\s+)?(?:react|python|mern|node|full\s*stack|software|frontend|backend|java|developer|engineer))\b', re.IGNORECASE),
-        re.compile(r'\b(?:hiring\s+alert|careers\s+opportunity|talent\s+search|job\s+opportunity)\b', re.IGNORECASE),
+        re.compile(r'\b(?:we\s+are\s+hiring|urgently\s+hiring|hiring\s+for|hiring|open\s+position|join\s+our\s+team|developer\s+required|walk-?in\s+drive|immediate\s+hiring|we\'re\s+looking\s+for)\b', re.IGNORECASE),
+        re.compile(r'\b(?:looking\s+for\s+(?:a|an|[0-9]+)?\s*(?:senior|junior|lead|founding|staff)?\s*(?:[a-z0-9.+/#\- ]{1,25})?(?:developer|engineer|builder|architect|coder|specialist|designer|intern|sde|sdet))\b', re.IGNORECASE),
+        re.compile(r'\b(?:hiring\s+alert|careers\s+opportunity|talent\s+search|job\s+opportunity|dm\s+me\s+if\s+you|send\s+(?:your\s+)?(?:cv|resume)|scaling\s+(?:the|our)\s+team|growing\s+(?:the|our)\s+team)\b', re.IGNORECASE),
     ]
 
     _DIRECT_HIRING_AUTHORS = [
@@ -370,7 +372,7 @@ class HiringIntentScorer:
                 break
 
         final_score = max(0, min(100, score))
-        is_hiring = final_score >= 60
+        is_hiring = final_score >= 50 and (hiring_match or has_email or has_apply_link)
 
         # Step 3: Classify Post Type
         if not is_hiring:

@@ -246,10 +246,35 @@ def unwrap_redirect_url(raw_url: str) -> Optional[str]:
             except Exception:
                 pass
 
-    # 3. Google /url?q= redirect
-    elif "google.com/url" in url_str and "q=" in url_str:
-        match = _GOOGLE_Q_PATTERN.search(url_str)
-        if match:
-            return urllib.parse.unquote(match.group(1))
-
     return url_str
+
+
+def compute_post_fingerprint(
+    url: Optional[str] = None,
+    company: Optional[str] = None,
+    role: Optional[str] = None,
+    contact_email: Optional[str] = None,
+    content: Optional[str] = None
+) -> str:
+    """
+    Computes a canonical deduplication fingerprint for a job opportunity.
+    Allows deduplicating cross-shared posts, mirror links, and identical postings from the same recruiter.
+    """
+    # 1. Primary fingerprint: Exact Activity ID
+    if url:
+        act_id = extract_activity_id(url)
+        if act_id:
+            return f"act_id::{act_id}"
+
+    # 2. Secondary fingerprint: Recruiter Email + Normalized Role
+    if contact_email and "@" in contact_email:
+        clean_email = contact_email.lower().strip()
+        clean_role = (role or "dev").lower().replace(" ", "")
+        return f"email_role::{clean_email}::{clean_role}"
+
+    # 3. Tertiary fingerprint: Company + Role + Content Hash prefix
+    clean_comp = (company or "hiring").lower().strip()
+    clean_role = (role or "dev").lower().strip()
+    content_sig = re.sub(r'\s+', '', (content or "")[:120].lower())
+    return f"content_sig::{clean_comp}::{clean_role}::{content_sig}"
+

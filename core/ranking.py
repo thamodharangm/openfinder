@@ -22,6 +22,7 @@ from core.hiring_intent import (
     RoleRelevanceMatcher,
 )
 from core.matcher import JobMatcher
+from core.time_utils import calculate_freshness_score
 
 logger = logging.getLogger(__name__)
 
@@ -53,13 +54,9 @@ class OpportunityRanker:
         hiring_conf = post.get("hiring_confidence", 0.9)
         intent_score = int(max(10, min(round(hiring_conf * 100), 100)))
 
-        # 2. Freshness Factor (Linear decay within window)
+        # 2. Freshness Factor (Half-Life non-linear decay curve)
         age_minutes = post.get("age_minutes", 0)
-        if max_age_minutes > 0 and age_minutes >= 0:
-            freshness_ratio = max(0.0, 1.0 - (age_minutes / max_age_minutes))
-            freshness_score = int(round(freshness_ratio * 100))
-        else:
-            freshness_score = 60
+        freshness_score = calculate_freshness_score(age_minutes=age_minutes, max_age_minutes=max_age_minutes)
 
         # 3. Role Factor
         role_score = post.get("role_match_score")

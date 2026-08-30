@@ -387,6 +387,58 @@ TOOLS = [
                 }
             }
         }
+    },
+    {
+        "name": "classify_hiring_post",
+        "description": "AI-powered Hiring Intent Classifier: Determines if a LinkedIn post is a genuine recruiter/founder hiring opportunity vs job-seeker outreach, edtech course promotion, or viral fluff with structured entity extraction.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "Full LinkedIn post text content"
+                },
+                "author": {
+                    "type": "string",
+                    "description": "Author name or headline",
+                    "default": ""
+                },
+                "url": {
+                    "type": "string",
+                    "description": "Optional post URL for caching",
+                    "default": ""
+                },
+                "target_role": {
+                    "type": "string",
+                    "description": "Expected target role",
+                    "default": "Software Engineer"
+                }
+            },
+            "required": ["text"]
+        }
+    },
+    {
+        "name": "prewarm_cache",
+        "description": "Autonomous cache pre-warmer: Pre-populates SQLite cache and curated repository for high-frequency queries to enable instant (<50ms) search responses.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "roles": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Roles to pre-warm (e.g. ['React Developer', 'Python Developer'])"
+                },
+                "locations": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Locations to pre-warm (e.g. ['India', 'Bangalore', 'Remote'])"
+                },
+                "timeframe": {
+                    "type": "string",
+                    "default": "past-24h"
+                }
+            }
+        }
     }
 ]
 
@@ -451,15 +503,17 @@ async def handle_tool(name: str, args: Dict[str, Any]) -> str:
             matched_skills=matched_list,
             candidate_name=args.get("candidate_name", "Candidate"),
             candidate_exp_years=int(args.get("candidate_exp_years", 2)),
-            recipient_name=args.get("recipient_name"),
+            recipient_name=args.get("recipient_name", "Hiring Manager"),
             recipient_email=args.get("recipient_email")
         )
         return json.dumps({"status": "success", "pitches": result}, ensure_ascii=False, indent=2)
 
     elif name == "parse_linkedin_post":
-        result = service.parse_linkedin_post(
-            url=args.get("post_url", ""),
-            candidate_profile_id=args.get("candidate_profile_id")
+        result = await LinkedInPostExtractor.extract_from_url_async(
+            url=args.get("url", ""),
+            candidate_name=args.get("candidate_name", "Candidate"),
+            candidate_exp_years=int(args.get("candidate_exp_years", 2)),
+            target_role=args.get("target_role")
         )
         return json.dumps(result, ensure_ascii=False, indent=2)
 
@@ -511,6 +565,23 @@ async def handle_tool(name: str, args: Dict[str, Any]) -> str:
             max_time_seconds=int(args.get("max_time_seconds", 25)),
             adaptive_mode=bool(args.get("adaptive_mode", True)),
             candidate_profile_id=args.get("candidate_profile_id")
+        )
+        return json.dumps(res, ensure_ascii=False, indent=2)
+
+    elif name == "classify_hiring_post":
+        res = await service.classify_hiring_post_async(
+            text=args.get("text", ""),
+            author=args.get("author", ""),
+            url=args.get("url", ""),
+            target_role=args.get("target_role")
+        )
+        return json.dumps(res, ensure_ascii=False, indent=2)
+
+    elif name == "prewarm_cache":
+        res = await service.prewarm_cache_async(
+            roles=args.get("roles"),
+            locations=args.get("locations"),
+            timeframe=args.get("timeframe", "past-24h")
         )
         return json.dumps(res, ensure_ascii=False, indent=2)
 

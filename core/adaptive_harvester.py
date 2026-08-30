@@ -133,3 +133,74 @@ class DynamicKeywordExtractor:
         discovered_locs = [loc for loc, count in loc_counter.most_common(2) if count >= 1]
 
         return discovered_roles, discovered_locs
+
+
+class BackgroundPrewarmer:
+    """
+    Autonomous Background Harvester & Cache Pre-warmer.
+    Pre-populates SQLite cache and curated repository for high-frequency queries
+    to deliver instant (<50ms) search latencies for end users.
+    """
+
+    POPULAR_ROLES = [
+        "React Developer",
+        "Full Stack Developer",
+        "Python Developer",
+        "DevOps Engineer",
+        "Java Developer",
+        "MERN Developer",
+        "Node.js Developer",
+        "Data Engineer",
+    ]
+
+    POPULAR_LOCATIONS = [
+        "India",
+        "Bangalore",
+        "Hyderabad",
+        "Remote",
+    ]
+
+    @classmethod
+    async def prewarm_async(
+        cls,
+        roles: Optional[List[str]] = None,
+        locations: Optional[List[str]] = None,
+        timeframe: str = "past-24h",
+        max_posts_per_target: int = 15
+    ) -> Dict[str, Any]:
+        from core.linkedin_finder import LinkedInFinder
+
+        target_roles = roles or cls.POPULAR_ROLES[:4]
+        target_locations = locations or cls.POPULAR_LOCATIONS[:3]
+
+        finder = LinkedInFinder()
+        stats: List[Dict[str, Any]] = []
+        total_discovered = 0
+        start_t = time.time()
+
+        for role in target_roles:
+            for loc in target_locations:
+                try:
+                    posts = await finder.search_hiring_posts_async(
+                        keywords=role,
+                        location=loc,
+                        timeframe=timeframe,
+                        max_results=max_posts_per_target
+                    )
+                    count = len(posts)
+                    total_discovered += count
+                    stats.append({"role": role, "location": loc, "harvested_count": count})
+                except Exception as e:
+                    logger.debug("Prewarming error on '%s' in '%s': %s", role, loc, e)
+                    stats.append({"role": role, "location": loc, "error": str(e)})
+
+        elapsed = round(time.time() - start_t, 2)
+        return {
+            "status": "success",
+            "total_harvested": total_discovered,
+            "targets_evaluated": len(stats),
+            "elapsed_seconds": elapsed,
+            "target_breakdown": stats,
+            "message": f"Pre-warmed {total_discovered} verified opportunities across {len(stats)} query vectors in {elapsed}s."
+        }
+

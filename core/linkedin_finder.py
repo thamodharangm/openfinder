@@ -196,11 +196,13 @@ class LinkedInFinder:
         client: httpx.AsyncClient,
         page: int = 1,
         max_results: int = DEFAULT_MAX_RESULTS
-    ) -> List[str]:
+    ) -> Tuple[List[str], Dict[str, Dict[str, str]]]:
         """
-        Asynchronously searches Yahoo for indexed LinkedIn /posts/ URLs.
+        Asynchronously searches Yahoo for indexed LinkedIn /posts/ URLs and collects snippets.
+        Returns: (post_urls, snippets_by_url)
         """
         post_urls: List[str] = []
+        snippets_by_url: Dict[str, Dict[str, str]] = {}
         try:
             url = "https://search.yahoo.com/search"
             start_b = (page - 1) * 10 + 1
@@ -208,18 +210,65 @@ class LinkedInFinder:
             resp = await client.get(url, params=params)
             if resp.status_code == 200:
                 soup = BeautifulSoup(resp.text, "html.parser")
-                for a in soup.find_all("a", href=True):
-                    raw_href = a["href"]
+                # Search result list items
+                for li in soup.find_all("li"):
+                    a_tag = li.find("a", href=True)
+                    if not a_tag:
+                        continue
+                    raw_href = a_tag["href"]
                     clean_href = self.clean_linkedin_url(raw_href)
                     if clean_href and is_valid_linkedin_post_url(clean_href):
                         if clean_href not in post_urls:
                             post_urls.append(clean_href)
+                            # Extract snippet text and title
+                            title = a_tag.get_text(strip=True)
+                            snippet_el = li.find("div", class_=re.compile(r"compText|dd|abstract", re.IGNORECASE)) or li.find("p")
+                            snippet = snippet_el.get_text(strip=True) if snippet_el else title
+                            snippets_by_url[clean_href] = {"title": title, "snippet": snippet}
             else:
                 logger.debug("Yahoo search returned non-200 status %d for query: %s", resp.status_code, query)
         except Exception as e:
             logger.debug("Yahoo async search network issue: %s", e)
 
-        return post_urls
+        return post_urls, snippets_by_url
+
+    async def search_recruiter_posts_duckduckgo_async(
+        self,
+        query: str,
+        max_results: int = DEFAULT_MAX_RESULTS
+    ) -> Tuple[List[str], Dict[str, Dict[str, str]]]:
+        """
+        Asynchronously searches DuckDuckGo for fresh indexed LinkedIn /posts/ URLs and snippets.
+        """
+        post_urls: List[str] = []
+        snippets_by_url: Dict[str, Dict[str, str]] = {}
+        try:
+            def _ddg_sync():
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)
+                    try:
+                        from ddgs import DDGS
+                    except ImportError:
+                        from duckduckgo_search import DDGS
+                    with DDGS() as ddgs:
+                        return list(ddgs.text(query, max_results=max_results))
+
+
+            results = await asyncio.to_thread(_ddg_sync)
+            for item in results:
+                raw_href = item.get("href") or item.get("url") or ""
+                clean_href = self.clean_linkedin_url(raw_href)
+                if clean_href and is_valid_linkedin_post_url(clean_href):
+                    if clean_href not in post_urls:
+                        post_urls.append(clean_href)
+                        title = item.get("title", "")
+                        snippet = item.get("body", "") or title
+                        snippets_by_url[clean_href] = {"title": title, "snippet": snippet}
+        except Exception as e:
+            logger.debug("DuckDuckGo async search issue: %s", e)
+
+        return post_urls, snippets_by_url
 
     def search_recruiter_posts_yahoo(
         self,
@@ -263,8 +312,9 @@ class LinkedInFinder:
     ) -> List[Dict[str, Any]]:
         """
         Asynchronously searches ONLY for genuine LinkedIn recruiter/founder /posts/ URLs.
-        Features connection pooling, multi-query expansion, bounded async batch extraction,
-        exact timestamps, and verified HIRING intent.
+        Features connection pooling, multi-engine parallel dorking (Yahoo + DuckDuckGo),
+        bounded async batch extraction, SERP snippet zero-downtime fallback, exact timestamps,
+        and verified HIRING intent.
         """
         intent = SearchIntentParser.parse(
             keywords=keywords,
@@ -321,20 +371,30 @@ class LinkedInFinder:
             self.cache.set(cache_key, session_posts, timeframe=timeframe)
             return session_posts[:max_results]
 
-        # 2. Secondary Channel: Search Engine Mirror Dorking with async extraction
+        # 2. Secondary Channel: Multi-Engine Parallel Search Dorking (Yahoo + DuckDuckGo)
         queries = intent.generate_dork_queries(max_queries=5)
         found_urls: List[str] = []
+        serp_snippets: Dict[str, Dict[str, str]] = {}
 
         timeout = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=10.0)
         async with httpx.AsyncClient(headers=self.headers, timeout=timeout, follow_redirects=True) as client:
+            search_tasks = []
+            # Yahoo queries (page 1 and 2 in parallel)
             for q in queries:
                 for p_num in range(1, 3):
-                    urls = await self.search_recruiter_posts_yahoo_async(q, client=client, page=p_num, max_results=max_results)
+                    search_tasks.append(self.search_recruiter_posts_yahoo_async(q, client=client, page=p_num, max_results=max_results))
+            # DuckDuckGo queries in parallel
+            for q in queries[:3]:
+                search_tasks.append(self.search_recruiter_posts_duckduckgo_async(q, max_results=max_results))
+
+            results = await asyncio.gather(*search_tasks, return_exceptions=True)
+            for res in results:
+                if isinstance(res, tuple) and len(res) == 2:
+                    urls, snippets = res
                     for u in urls:
                         if u not in found_urls and is_valid_linkedin_post_url(u):
                             found_urls.append(u)
-                    if len(found_urls) >= max_results * 4:
-                        break
+                    serp_snippets.update(snippets)
 
         # 3. Tertiary Channel: Zero-Downtime Autonomous Curated Repository
         from core.live_repository import find_matching_post_records
@@ -367,7 +427,7 @@ class LinkedInFinder:
         repo_urls_to_use = [u for u in fresh_candidate_urls if u in _repo_by_url]
         scraped_urls_to_use = [u for u in fresh_candidate_urls if u not in _repo_by_url]
 
-        # 5. Batch Extract in Parallel
+        # 5. Batch Extract in Parallel (HTML DOM with Snippet Fast-Fallback)
         scraped_extracted = []
         if scraped_urls_to_use:
             scraped_extracted = await LinkedInPostExtractor.extract_batch_async(
@@ -376,8 +436,26 @@ class LinkedInFinder:
                 skills_taxonomy=self.skills_taxonomy,
                 target_role=intent.target_role,
                 target_location=intent.target_location,
-                max_age_minutes=max_age_minutes
+                max_age_minutes=max_age_minutes,
+                candidate_profile=candidate_profile
             )
+
+        # Fallback: for URLs that failed direct DOM extraction, use SERP snippets!
+        for idx, post_data in enumerate(scraped_extracted):
+            if not post_data or post_data.get("status") != "success":
+                url_failed = post_data.get("post_url") if isinstance(post_data, dict) else (scraped_urls_to_use[idx] if idx < len(scraped_urls_to_use) else "")
+                if url_failed and url_failed in serp_snippets:
+                    snip_data = serp_snippets[url_failed]
+                    recovered = LinkedInPostExtractor.extract_from_serp_snippet(
+                        url=url_failed,
+                        title=snip_data.get("title", ""),
+                        snippet=snip_data.get("snippet", ""),
+                        skills_taxonomy=self.skills_taxonomy,
+                        target_role=intent.target_role,
+                        target_location=intent.target_location,
+                        candidate_profile=candidate_profile
+                    )
+                    scraped_extracted[idx] = recovered
 
         repo_extracted = []
         if repo_urls_to_use:
@@ -387,22 +465,27 @@ class LinkedInFinder:
                 skills_taxonomy=self.skills_taxonomy,
                 target_role=intent.target_role,
                 target_location=intent.target_location,
-                max_age_minutes=None  # Curated repository posts bypass raw age rejection
+                max_age_minutes=None,  # Curated repository posts bypass raw age rejection
+                candidate_profile=candidate_profile
             )
 
         extracted_posts = list(repo_extracted) + list(scraped_extracted)
 
-        # 6. Parse and Build Clean Structured Objects
+        # 6. Parse, Deduplicate and Build Clean Structured Objects
+        from core.linkedin_urls import compute_post_fingerprint
+
         parsed_posts: List[Dict[str, Any]] = []
+        seen_fingerprints: Set[str] = set()
+
         for post_data in extracted_posts:
             if not post_data or post_data.get("status") != "success":
                 continue
 
-            if post_data.get("hiring_intent") != "HIRING":
+            if post_data.get("hiring_intent") not in ["HIRING", "POTENTIAL_HIRING"]:
                 continue
 
             role_score = post_data.get("role_match_score", 0)
-            if intent.role_family != "GENERAL_SOFTWARE" and role_score < 50:
+            if intent.role_family != "GENERAL_SOFTWARE" and role_score < 45:
                 continue
 
             post_url = post_data.get("post_url")
@@ -413,6 +496,18 @@ class LinkedInFinder:
             stable_location = repo_meta.get("primary_location") or post_data.get("location", "Unspecified / Remote")
             stable_work_mode = repo_meta.get("work_mode") or ("Remote" if "remote" in post_data.get("full_post_content", "").lower() else "On-Site")
             stable_emails = repo_meta.get("recruiter_emails") or post_data.get("recruiter_emails", [])
+
+            # Smart Fingerprint Deduplication
+            fp = compute_post_fingerprint(
+                url=post_url,
+                company=stable_company,
+                role=stable_role,
+                contact_email=stable_emails[0] if stable_emails else None,
+                content=post_data.get("full_post_content", "")
+            )
+            if fp in seen_fingerprints:
+                continue
+            seen_fingerprints.add(fp)
 
             parsed_posts.append({
                 "title": stable_role,
@@ -444,7 +539,7 @@ class LinkedInFinder:
                 "contact_numbers": post_data.get("contact_numbers", []),
                 "application_links": [post_url],
                 "post_url": post_url,
-                "discovery_source": "repository" if post_url in _repo_by_url else "search_engine",
+                "discovery_source": "repository" if post_url in _repo_by_url else post_data.get("extraction_source", "search_engine"),
                 "raw_snippet": post_data.get("full_post_content", "")[:350]
             })
 
