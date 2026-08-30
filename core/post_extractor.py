@@ -95,8 +95,8 @@ class LinkedInPostExtractor:
         "Upgrade-Insecure-Requests": "1",
     }
 
-    TIMEOUT_CONFIG = httpx.Timeout(connect=5.0, read=8.0, write=5.0, pool=8.0)
-    MAX_CONCURRENCY = 5
+    TIMEOUT_CONFIG = httpx.Timeout(connect=3.0, read=4.0, write=3.0, pool=4.0)
+    MAX_CONCURRENCY = 8
 
     EMAIL_REGEX = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", re.IGNORECASE)
     PHONE_REGEX = re.compile(r"(?:\+91[\-\s]?)?[6789]\d{9}\b")
