@@ -19,7 +19,7 @@ import logging
 from pathlib import Path
 import re
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 import urllib.parse
 
 from bs4 import BeautifulSoup
