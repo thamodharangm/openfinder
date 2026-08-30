@@ -330,7 +330,8 @@ class LinkedInPostExtractor:
             }
 
         # 4. Contacts & Entities Extraction
-        emails = sorted(set(cls.EMAIL_REGEX.findall(full_text)))
+        raw_emails = cls.EMAIL_REGEX.findall(full_text)
+        emails = sorted(set(e.strip(".,;:()[]{}<>\"' ") for e in raw_emails if "@" in e and len(e.strip(".,;:()[]{}<>\"' ")) > 5))
         phones = sorted(set(cls.PHONE_REGEX.findall(full_text)))
         salary_str = cls.extract_salary(full_text)
 

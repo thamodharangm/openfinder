@@ -70,7 +70,7 @@ class OutreachPitchGenerator:
         job_title: str = "Software Engineer",
         company_name: str = "your team",
         matched_skills: Optional[Union[List[str], str]] = None,
-        candidate_name: str = "Candidate",
+        candidate_name: str = "Thamodharan Ganesan",
         candidate_exp_years: int = 2,
         recipient_name: Optional[str] = None,
         recipient_email: Optional[str] = None,
@@ -88,6 +88,7 @@ class OutreachPitchGenerator:
         company_clean = cls._clean_company_name(company_name)
         greeting_name = cls._clean_greeting_name(recipient_name)
         formal_recipient = recipient_name.strip().title() if (recipient_name and cls._clean_greeting_name(recipient_name) != "there") else "Hiring Team"
+        cand_name = candidate_name if candidate_name and candidate_name.lower() != "candidate" else "Thamodharan Ganesan"
 
         if isinstance(matched_skills, str):
             skills_list = [s.strip() for s in matched_skills.split(",") if s.strip()]
@@ -97,10 +98,10 @@ class OutreachPitchGenerator:
             skills_list = []
 
         if not skills_list:
-            skills_list = ["Full Stack Development", "System Design", "Cloud Services"]
+            skills_list = ["React.js", "Node.js", "Express.js", "MongoDB", "JavaScript", "Next.js"]
 
         skills_str = ", ".join(skills_list[:3])
-        primary_skill = skills_list[0] if skills_list else "Software Engineering"
+        primary_skill = skills_list[0] if skills_list else "React.js"
 
         # 2. LinkedIn Connection Note (Strictly capped < 300 chars)
         connection_note = (
@@ -131,7 +132,7 @@ class OutreachPitchGenerator:
             linkedin_dm += f"• Notable Impact: {key_achievement}\n"
         linkedin_dm += (
             f"\nI would welcome a brief 5-minute chat to discuss how I can contribute to {company_clean}'s engineering goals.\n\n"
-            f"Best regards,\n{candidate_name}"
+            f"Best regards,\n{cand_name}"
         )
 
         # 4. Founder / Startup Direct Pitch
@@ -141,7 +142,7 @@ class OutreachPitchGenerator:
             f"I specialize in {skills_str} and thrive in fast-paced startup environments where shipping high-quality features quickly is essential.\n\n"
             f"I have {candidate_exp_years}+ years of experience owning features from design to deployment.\n\n"
             f"Would you be open to a quick 5-minute intro call this week?\n\n"
-            f"Cheers,\n{candidate_name}"
+            f"Cheers,\n{cand_name}"
         )
 
         # 5. Internal Referral Request Pitch
@@ -150,11 +151,11 @@ class OutreachPitchGenerator:
             f"Hope you are having a great week! I came across the {job_title} opening at {company_clean} and was really impressed by your team's work. "
             f"With {candidate_exp_years}+ years in {skills_str}, I believe my skillset would be a great fit.\n\n"
             f"Would you be open to reviewing my resume or passing along an internal referral? Happy to share my portfolio.\n\n"
-            f"Thanks a lot for your time!\n{candidate_name}"
+            f"Thanks a lot for your time!\n{cand_name}"
         )
 
         # 6. Direct Recruiter Email Pitch (Concise, High-Converting Format)
-        email_subject = f"Application: {job_title} - {candidate_name} ({primary_skill})"
+        email_subject = f"Application: {job_title} - {cand_name} ({primary_skill})"
         
         email_body = (
             f"Hi {greeting_name},\n\n"
@@ -162,7 +163,7 @@ class OutreachPitchGenerator:
             f"With {candidate_exp_years}+ years of practical experience working with {skills_str}, "
             f"I am confident in delivering immediate value to your engineering team.\n\n"
             f"I have attached my resume for your consideration. Looking forward to discussing how my skillset aligns with {company_clean}'s goals.\n\n"
-            f"Best regards,\n{candidate_name}"
+            f"Best regards,\n{cand_name}"
         )
 
         if candidate_phone or candidate_linkedin or candidate_github:
@@ -183,7 +184,7 @@ class OutreachPitchGenerator:
             f"Hope you are having a great week! Following up on my application for the {job_title} position at {company_clean}. "
             f"I remain very enthusiastic about the opportunity to contribute with my {skills_str} background.\n\n"
             f"Please let me know if you need any additional project details or code samples.\n\n"
-            f"Best regards,\n{candidate_name}"
+            f"Best regards,\n{cand_name}"
         )
 
         day7_follow_up = (
@@ -191,7 +192,7 @@ class OutreachPitchGenerator:
             f"I wanted to send a quick final note regarding the {job_title} opening at {company_clean}. "
             f"I understand you have a busy schedule. If the position is still open, I would be thrilled to connect for 5 minutes.\n\n"
             f"Thank you again for your time and consideration!\n\n"
-            f"Best,\n{candidate_name}"
+            f"Best,\n{cand_name}"
         )
 
         # 8. 1-Click Email Deep Links (Mailto, Gmail, Outlook)
