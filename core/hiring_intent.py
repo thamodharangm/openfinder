@@ -140,6 +140,43 @@ class JobRoleExtractor:
 
         return roles
 
+    @classmethod
+    def normalize_job_title(cls, raw_title: str, fallback_role: str = "Software Engineer") -> str:
+        """
+        Cleans and canonicalizes raw post titles, hashtag strings, and noisy role slugs into standard job titles.
+        Example:
+          '#mern #hiring #mernstack #nodejs' -> 'MERN Stack Developer'
+          'we are hiring frontend react developer' -> 'Frontend React Developer'
+        """
+        if not raw_title:
+            return fallback_role
+
+        # Strip hashtags
+        clean = re.sub(r'#\S+', '', raw_title).strip()
+        clean = re.sub(r'\b(hiring|urgent|immediate|we are|join our team|for an exciting opportunity|opening for|looking for|alert)\b', '', clean, flags=re.IGNORECASE).strip()
+        clean = re.sub(r'\s+', ' ', clean).strip(' :,-–—•*|;/')
+
+        t_low = f"{raw_title} {clean}".lower()
+        if "mern" in t_low:
+            return "MERN Stack Developer"
+        elif "react native" in t_low:
+            return "React Native Developer"
+        elif "frontend" in t_low or "front-end" in t_low:
+            return "Frontend React Developer" if "react" in t_low else "Frontend Developer"
+        elif "full stack" in t_low or "fullstack" in t_low:
+            return "Full Stack Developer"
+        elif "react" in t_low:
+            return "React.js Developer"
+        elif "node" in t_low:
+            return "Node.js Developer"
+        elif "python" in t_low:
+            return "Python Developer"
+
+        if len(clean) >= 4 and clean.lower() not in cls._INVALID_ROLE_FRAGMENTS and len(clean.split()) <= 4:
+            return clean.title()
+
+        return fallback_role
+
 
 # ============================================================================
 # 2. HIRING INTENT CLASSIFIER

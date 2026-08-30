@@ -604,12 +604,12 @@ class LinkedInFinder:
                 for loc in clean_locs[:4]:
                     dork_variations = [
                         f'site:linkedin.com/posts/ "{role}" {loc} "email"',
-                        f'site:linkedin.com/posts/ {role} {loc} hiring',
-                        f'site:linkedin.com/posts/ "{role}" {loc}',
-                        f'site:linkedin.com/posts/ {role} {loc} "we are hiring"'
+                        f'site:linkedin.com/posts/ "{role}" {loc} ("@gmail.com" OR "@" OR "send resume")',
+                        f'site:linkedin.com/posts/ "{role}" {loc} hiring',
+                        f'site:linkedin.com/posts/ "{role}" {loc} "we are hiring"'
                     ]
-                    for dork in dork_variations[:2]:
-                        for p in range(1, max(1, min(max_pages, 4)) + 1):
+                    for dork in dork_variations:
+                        for p in range(1, max(1, min(max_pages, 2)) + 1):
                             fetch_coroutines.append(_fetch_page(dork, p))
 
             page_results = await asyncio.gather(*fetch_coroutines, return_exceptions=True)

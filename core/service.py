@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import DEFAULT_LOCATION, DEFAULT_MAX_RESULTS, DEFAULT_TIMEFRAME, ErrorCodes
 from core.adaptive_harvester import DynamicKeywordExtractor, QueryYieldTracker
+from core.hiring_intent import JobRoleExtractor
 from core.linkedin_finder import LinkedInFinder
 from core.linkedin_session import LinkedInSessionSearch
 from core.linkedin_urls import is_valid_linkedin_post_url, normalize_linkedin_post_url
@@ -944,9 +945,7 @@ class OpenFinderService:
 
             # Clean role
             raw_role = p.get("role") or p.get("job_role") or p.get("title") or roles_list[0]
-            clean_role = raw_role.replace("#", "").strip()
-            if clean_role.lower() in ["alert", "for", "hiring", "immediate", "join our team", "for an exciting opportunity", "urgent"] or len(clean_role) < 4:
-                clean_role = roles_list[0]
+            clean_role = JobRoleExtractor.normalize_job_title(raw_role, fallback_role=roles_list[0])
 
             clean_item = {
                 "company": p.get("company", "Hiring Team"),
