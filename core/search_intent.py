@@ -12,16 +12,12 @@ Features:
 - Experience band and Remote-mode query injection.
 """
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 import logging
-from pathlib import Path
 import re
-import sys
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Set
 
-# Add root to sys.path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from core.time_utils import FRESHNESS_WINDOWS, get_max_age_minutes
+from core.time_utils import get_max_age_minutes
 
 logger = logging.getLogger(__name__)
 

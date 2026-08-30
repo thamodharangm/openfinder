@@ -27,7 +27,7 @@ import re
 import sys
 import tempfile
 import time
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Union
 
 # Ensure root in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -37,14 +37,14 @@ from core.adaptive_harvester import DynamicKeywordExtractor, QueryYieldTracker
 from core.hiring_intent import JobRoleExtractor
 from core.linkedin_finder import LinkedInFinder
 from core.linkedin_session import LinkedInSessionSearch
-from core.linkedin_urls import is_valid_linkedin_post_url, normalize_linkedin_post_url
+from core.linkedin_urls import normalize_linkedin_post_url
 from core.live_repository import get_curated_posts
 from core.pitch_generator import OutreachPitchGenerator
 from core.post_extractor import LinkedInPostExtractor
 from core.profile_store import CandidateProfileStore
 from core.ranking import OpportunityRanker
 from core.resume_parser import ResumeParser
-from core.spam_filter import HiringIntentScorer, calculate_hiring_intent_score, classify_post_type
+from core.spam_filter import HiringIntentScorer
 from core.time_utils import extract_snowflake_timestamp, get_max_age_minutes
 
 logger = logging.getLogger(__name__)
@@ -575,6 +575,332 @@ class OpenFinderService:
                 candidate_exp_years=candidate_exp_years,
                 candidate_name=candidate_name,
                 debug=debug
+            )
+        )
+
+    async def linkedin_resume_match_async(
+        self,
+        candidate_profile_id: str,
+        location: str = DEFAULT_LOCATION,
+        timeframe: str = "past-24h",
+        max_results: int = 20,
+        min_match_score: int = 40,
+        remote_only: bool = False,
+        debug: bool = False
+    ) -> Dict[str, Any]:
+        """
+        LinkedIn-Session-Exclusive, Resume-Mandatory Opportunity Finder.
+
+        Fetches ONLY verified LinkedIn /posts/ hiring announcements discovered via
+        authenticated LinkedIn session cookies (li_at + JSESSIONID). No curated
+        repository, no Yahoo/DuckDuckGo search engine fallbacks.
+
+        Results are strictly ranked by 6-factor ATS match score derived from the
+        candidate's uploaded resume profile. Includes per-job skill gap analysis.
+
+        Args:
+            candidate_profile_id: Mandatory — ID of the uploaded resume profile.
+            location: Target location (e.g. 'Bangalore', 'Remote', 'India').
+            timeframe: Freshness window ('past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d').
+            max_results: Maximum number of matched results to return (default 20, max 50).
+            min_match_score: Minimum ATS match score 0-100 to include in results (default 40).
+            remote_only: If True, only include remote-friendly positions.
+            debug: If True, include funnel metrics in the response.
+        """
+        # ── 1. Validate resume profile ──────────────────────────────────────
+        if not candidate_profile_id or not candidate_profile_id.strip():
+            return {
+                "status": "error",
+                "reason": "MISSING_PROFILE_ID",
+                "error": (
+                    "candidate_profile_id is required for linkedin_resume_match. "
+                    "Upload your resume first using upload_resume or upload_resume_text."
+                )
+            }
+
+        candidate_profile = self.profile_store.get_profile(candidate_profile_id.strip())
+        if not candidate_profile:
+            return {
+                "status": "error",
+                "reason": "PROFILE_NOT_FOUND",
+                "error": (
+                    f"No resume profile found for ID '{candidate_profile_id}'. "
+                    "Please upload your resume using upload_resume or upload_resume_text."
+                )
+            }
+
+        # ── 2. Validate LinkedIn session ────────────────────────────────────
+        session_health = LinkedInSessionSearch.check_session_health()
+        if not session_health.get("valid", False):
+            return {
+                "status": "error",
+                "reason": "LINKEDIN_SESSION_UNAVAILABLE",
+                "error": (
+                    "LinkedIn session cookies not configured or expired. "
+                    "Set LINKEDIN_LI_AT and LINKEDIN_JSESSIONID in the .env file."
+                ),
+                "session_status": session_health
+            }
+
+        # ── 3. Build role queries from resume ───────────────────────────────
+        primary_role   = candidate_profile.get("primary_role") or "Software Engineer"
+        target_roles   = candidate_profile.get("target_roles") or [primary_role]
+        top_skills     = candidate_profile.get("top_skills") or candidate_profile.get("skills") or []
+        exp_years      = candidate_profile.get("years_of_experience") or 0
+        cand_name      = candidate_profile.get("candidate_name") or "Candidate"
+        clean_location = location.strip() if location else DEFAULT_LOCATION
+        bounded_max    = max(5, min(int(max_results), 50))
+
+        # Build role query set: primary role + top-2 skills as targeted queries
+        role_queries: List[str] = []
+        for role in target_roles[:3]:
+            if role and role.strip():
+                role_queries.append(role.strip())
+        if top_skills:
+            # Add a skill-combo query for specificity
+            skill_combo = " ".join(top_skills[:3])
+            role_queries.append(f"{primary_role} {skill_combo}")
+        if not role_queries:
+            role_queries = ["Software Engineer"]
+        # Deduplicate while preserving order
+        seen_q: Set[str] = set()
+        unique_queries: List[str] = []
+        for q in role_queries:
+            ql = q.lower()
+            if ql not in seen_q:
+                seen_q.add(ql)
+                unique_queries.append(q)
+
+        # ── 4. LinkedIn-Session-Only discovery (parallel across role queries) ──
+        logger.info(
+            "linkedin_resume_match: Starting LinkedIn-session-only search "
+            "for profile '%s' (%s) with %d role queries",
+            cand_name, candidate_profile_id, len(unique_queries)
+        )
+
+        session_tasks = [
+            LinkedInSessionSearch.search_posts_internal_async(
+                keywords=q,
+                date_posted=timeframe,
+                max_results=bounded_max * 2,           # over-fetch, then re-rank
+                skills_taxonomy=self.finder.skills_taxonomy,
+                target_role=q,
+                target_location=clean_location,
+                candidate_profile=candidate_profile,
+                max_discovery_candidates=60,
+                debug=debug
+            )
+            for q in unique_queries[:5]               # max 5 parallel queries
+        ]
+        result_batches = await asyncio.gather(*session_tasks, return_exceptions=True)
+
+        # ── 5. Merge, deduplicate, re-rank by ATS match score ───────────────
+        from core.matcher import JobMatcher
+        seen_urls: Set[str] = set()
+        raw_posts: List[Dict[str, Any]] = []
+
+        for batch in result_batches:
+            if not isinstance(batch, list):
+                continue
+            for post in batch:
+                url = post.get("post_url")
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+
+                # Only keep genuine LinkedIn hiring posts
+                if post.get("hiring_intent") not in ("HIRING", "POTENTIAL_HIRING"):
+                    continue
+
+                # Skip non-remote if remote_only requested
+                if remote_only:
+                    post_loc = str(post.get("location", "")).lower()
+                    work_mode = str(post.get("work_mode", "")).lower()
+                    post_content = str(post.get("full_post_content", "") or post.get("raw_snippet", "")).lower()
+                    if "remote" not in post_loc and "remote" not in work_mode and "remote" not in post_content:
+                        continue
+
+                # Re-compute deep ATS match using the full candidate profile
+                job_post_dict = {
+                    "title":              post.get("role") or post.get("title") or primary_role,
+                    "required_skills":    post.get("skills") or post.get("required_skills") or [],
+                    "experience_required": post.get("experience_required") or post.get("experience_fit") or "",
+                    "description":        post.get("full_post_content") or post.get("raw_snippet") or "",
+                    "domains":            post.get("domains") or [],
+                    "location":           post.get("location") or "",
+                    "remote":             "remote" in str(post.get("location", "")).lower(),
+                    "education_required": post.get("education_required") or "",
+                }
+                deep_match = JobMatcher.calculate_deep_match(candidate_profile, job_post_dict)
+                match_score = deep_match.get("match_score", 0)
+
+                # Apply minimum ATS match threshold
+                if match_score < min_match_score:
+                    continue
+
+                post["match_score"]         = match_score
+                post["match_grade"]         = deep_match.get("match_grade", "")
+                post["matched_skills"]      = deep_match.get("matched_skills", [])
+                post["missing_skills"]      = deep_match.get("missing_skills", [])
+                post["ats_recommendations"] = deep_match.get("ats_recommendations", [])
+                post["tech_score"]          = deep_match.get("tech_score")
+                post["exp_score"]           = deep_match.get("exp_score")
+                post["role_score"]          = deep_match.get("role_score")
+                post["domain_score"]        = deep_match.get("domain_score")
+                post["location_score"]      = deep_match.get("location_score")
+
+                # Skill gap analysis: projected score if missing skills are added
+                missing = deep_match.get("missing_skills", [])
+                if missing:
+                    projected_score = min(100, match_score + len(missing) * 6)
+                    post["skill_gap_analysis"] = {
+                        "current_match_score": match_score,
+                        "projected_score_if_upskilled": projected_score,
+                        "skills_to_add": missing[:8],
+                        "quick_win_recommendation": (
+                            f"Adding {', '.join(missing[:3])} to your resume could raise your match "
+                            f"from {match_score}% → ~{projected_score}% for this role."
+                        ) if missing else None
+                    }
+                else:
+                    post["skill_gap_analysis"] = {
+                        "current_match_score": match_score,
+                        "projected_score_if_upskilled": match_score,
+                        "skills_to_add": [],
+                        "quick_win_recommendation": "Strong match — your resume aligns well with this role!"
+                    }
+
+                raw_posts.append(post)
+
+        # ── 6. Sort by match_score (primary) then freshness (secondary) ──────
+        raw_posts.sort(
+            key=lambda p: (p.get("match_score", 0), -p.get("age_minutes", 9999)),
+            reverse=True
+        )
+        final_posts = raw_posts[:bounded_max]
+
+        # ── 7. Build clean response ──────────────────────────────────────────
+        clean_results: List[Dict[str, Any]] = []
+        for p in final_posts:
+            recruiter_emails = p.get("recruiter_emails") or p.get("contact_emails") or []
+            # Auto-generate outreach pitch for posts with email
+            outreach_pitches = p.get("tailored_outreach_pitches") or {}
+            if recruiter_emails and not outreach_pitches:
+                try:
+                    from core.pitch_generator import OutreachPitchGenerator
+                    role_title = (p.get("role") or primary_role)[:80]
+                    outreach_pitches = OutreachPitchGenerator.generate_suite(
+                        job_title=role_title,
+                        company_name=p.get("company") or "Hiring Team",
+                        matched_skills=p.get("matched_skills") or top_skills[:5],
+                        candidate_name=cand_name,
+                        candidate_exp_years=exp_years,
+                        recipient_name=p.get("author") or "Hiring Manager",
+                        recipient_email=recruiter_emails[0] if recruiter_emails else None,
+                    )
+                except Exception:
+                    pass
+
+            clean_results.append({
+                "company":              p.get("company") or "Hiring Team",
+                "role":                 p.get("role") or p.get("title") or primary_role,
+                "author":               p.get("author") or "Hiring Manager",
+                "author_type":          p.get("author_type") or "RECRUITER",
+                "location":             p.get("location") or "Unspecified / Remote",
+                "work_mode":            p.get("work_mode") or "Unspecified",
+                "posted_time":          p.get("posted_time") or p.get("age_text") or "Recently",
+                "age_minutes":          p.get("age_minutes") or 0,
+                "hiring_intent":        p.get("hiring_intent") or "HIRING",
+
+                # ATS Match
+                "match_score":          p.get("match_score"),
+                "match_grade":          p.get("match_grade"),
+                "matched_skills":       p.get("matched_skills") or [],
+                "missing_skills":       p.get("missing_skills") or [],
+                "ats_recommendations":  p.get("ats_recommendations") or [],
+                "skill_gap_analysis":   p.get("skill_gap_analysis") or {},
+                "score_breakdown": {
+                    "tech_stack":       p.get("tech_score"),
+                    "experience":       p.get("exp_score"),
+                    "role_alignment":   p.get("role_score"),
+                    "domain":           p.get("domain_score"),
+                    "location":         p.get("location_score"),
+                },
+
+                # Contact & Apply
+                "recruiter_emails":     recruiter_emails,
+                "contact_numbers":      p.get("contact_numbers") or p.get("contact_phones") or [],
+                "post_url":             p.get("post_url"),
+                "source":               "LinkedIn Session (Authenticated)",
+                "outreach_pitches":     outreach_pitches,
+            })
+
+        # ── 8. Return structured response ────────────────────────────────────
+        session_info = {
+            "authenticated": True,
+            "has_csrf": session_health.get("has_csrf", False),
+            "queries_used": unique_queries,
+            "total_linkedin_posts_discovered": len(seen_urls),
+            "posts_above_min_match_threshold": len(raw_posts),
+        }
+
+        if not clean_results:
+            tips = []
+            if len(seen_urls) == 0:
+                tips.append("LinkedIn session may have expired — refresh LINKEDIN_LI_AT in .env.")
+            else:
+                tips.append(f"Found {len(seen_urls)} LinkedIn posts but none cleared the {min_match_score}% match threshold.")
+                tips.append(f"Try lowering min_match_score to 25 or broadening the location.")
+            return {
+                "status": "success",
+                "candidate_name": cand_name,
+                "candidate_profile_id": candidate_profile_id,
+                "location": clean_location,
+                "timeframe": timeframe,
+                "count": 0,
+                "results": [],
+                "session_info": session_info,
+                "tips": tips,
+            }
+
+        return {
+            "status": "success",
+            "candidate_name": cand_name,
+            "candidate_profile_id": candidate_profile_id,
+            "primary_role": primary_role,
+            "top_skills": top_skills[:10],
+            "location": clean_location,
+            "timeframe": timeframe,
+            "min_match_score": min_match_score,
+            "count": len(clean_results),
+            "results": clean_results,
+            "session_info": session_info,
+            "message": (
+                f"Found {len(clean_results)} LinkedIn hiring posts matched to {cand_name}'s resume "
+                f"(min ATS score: {min_match_score}%). All results are live, authenticated LinkedIn posts."
+            ),
+        }
+
+    def linkedin_resume_match(
+        self,
+        candidate_profile_id: str,
+        location: str = DEFAULT_LOCATION,
+        timeframe: str = "past-24h",
+        max_results: int = 20,
+        min_match_score: int = 40,
+        remote_only: bool = False,
+        debug: bool = False
+    ) -> Dict[str, Any]:
+        """Synchronous entrypoint for linkedin_resume_match_async."""
+        return _run_async_safely(
+            self.linkedin_resume_match_async(
+                candidate_profile_id=candidate_profile_id,
+                location=location,
+                timeframe=timeframe,
+                max_results=max_results,
+                min_match_score=min_match_score,
+                remote_only=remote_only,
+                debug=debug,
             )
         )
 

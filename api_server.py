@@ -22,14 +22,12 @@ import asyncio
 from contextlib import asynccontextmanager
 import json
 import logging
-import os
 from pathlib import Path
 import shutil
 import sys
 import tempfile
 import time
-from typing import Any, Dict, List, Optional, Union
-import urllib.parse
+from typing import Any, Dict, Optional
 import uuid
 
 # Ensure UTF-8 stdout/stderr on Windows terminals
@@ -55,9 +53,6 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response, Streamin
 
 from core.linkedin_finder import LinkedInFinder
 from core.linkedin_session import LinkedInSessionSearch
-from core.matcher import JobMatcher
-from core.pitch_generator import OutreachPitchGenerator
-from core.post_extractor import LinkedInPostExtractor
 from core.resume_parser import ResumeParser
 from core.service import OpenFinderService
 
@@ -82,7 +77,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="OpenFinder - Universal MCP Job Connector for Freshers & Experienced",
     description="Full Dual Protocol API supporting Claude Web Connectors (MCP SSE & JSON-RPC) and ChatGPT OpenAPI Actions.",
-    version="2.0.0",
+    version="3.0.0",
     lifespan=lifespan,
     servers=[
         {"url": "https://openfinder.onrender.com", "description": "Production OpenFinder API Server"}
@@ -116,7 +111,7 @@ def health_check():
     return {
         "status": "online",
         "service": "OpenFinder Universal AI Connector",
-        "version": "2.0.0",
+        "version": "3.0.0",
         "chatgpt_actions_ready": True,
         "claude_connectors_ready": True,
         "linkedin_authenticated": session_health.get("valid", False),
@@ -513,6 +508,28 @@ async def mcp_message_handler(request: Request):
                         }
                     },
                     {
+                        "name": "linkedin_resume_match",
+                        "description": (
+                            "LinkedIn-Session-Exclusive, Resume-Mandatory Opportunity Finder. "
+                            "Fetches ONLY live authenticated LinkedIn /posts/ hiring announcements. "
+                            "NO curated repository or search engine fallbacks. "
+                            "Results are strictly ranked by 6-factor ATS match score from candidate's uploaded resume. "
+                            "Each result includes matched skills, missing skills, skill gap analysis with projected scores, and auto-generated outreach pitches."
+                        ),
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "candidate_profile_id": { "type": "string", "description": "Mandatory -- ID from upload_resume or upload_resume_text" },
+                                "location": { "type": "string", "description": "Target location (e.g. 'Bangalore', 'Remote', 'India')", "default": "India" },
+                                "timeframe": { "type": "string", "description": "Freshness window: 'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d'", "default": "past-24h" },
+                                "max_results": { "type": "integer", "description": "Max opportunities (default: 20, max: 50)", "default": 20 },
+                                "min_match_score": { "type": "integer", "description": "Minimum ATS match score 0-100 (default: 40)", "default": 40 },
+                                "remote_only": { "type": "boolean", "description": "Return only remote positions", "default": False }
+                            },
+                            "required": ["candidate_profile_id"]
+                        }
+                    },
+                    {
                         "name": "bulk_harvest_opportunities",
                         "description": "Adaptive Yield-Optimized Bulk Harvester: Performs wide-matrix parallel search and dynamic keyword expansion to harvest 50-200+ verified hiring posts with composite deduplication, numerical intent scoring (>=60), yield tracking, and 25s timeout safety.",
                         "inputSchema": {
@@ -677,6 +694,21 @@ async def mcp_message_handler(request: Request):
                     "result": {"content": [{"type": "text", "text": json.dumps({"status": "success", "count": len(posts), "markdown_table": table, "posts": posts}, indent=2)}]}
                 }
 
+            elif tool_name == "linkedin_resume_match":
+                res = await service.linkedin_resume_match_async(
+                    candidate_profile_id=args.get("candidate_profile_id") or args.get("profile_id") or "",
+                    location=args.get("location", "India"),
+                    timeframe=args.get("timeframe", "past-24h"),
+                    max_results=int(args.get("max_results", 20)),
+                    min_match_score=int(args.get("min_match_score", 40)),
+                    remote_only=bool(args.get("remote_only", False)),
+                )
+                response_payload = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
+                }
+
             elif tool_name == "bulk_harvest_opportunities":
                 res = await service.bulk_harvest_opportunities_async(
                     roles=args.get("roles"),
@@ -815,6 +847,48 @@ async def search_opportunities_endpoint(
             "count": 0,
             "results": [],
             "message": f"Search encountered an exception: {str(e)}"
+        }
+
+
+
+@app.get("/api/linkedin-resume-match", tags=["Opportunities"])
+@app.post("/api/linkedin-resume-match", tags=["Opportunities"])
+async def linkedin_resume_match_endpoint(
+    candidate_profile_id: str = Query(..., description="Mandatory — ID returned by upload_resume or upload_resume_text"),
+    location: str = Query("India", description="Target city/location (e.g. 'Bangalore', 'Remote')"),
+    timeframe: str = Query("past-24h", description="Freshness window: 'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d'"),
+    max_results: int = Query(20, description="Max opportunities to return (max: 50)"),
+    min_match_score: int = Query(40, description="Minimum ATS match score 0-100 (default: 40)"),
+    remote_only: bool = Query(False, description="Return only remote-friendly positions"),
+    debug: bool = Query(False, description="Include funnel metrics")
+) -> Dict[str, Any]:
+    """
+    LinkedIn-Session-Exclusive, Resume-Mandatory Opportunity Finder.
+
+    Fetches ONLY live authenticated LinkedIn /posts/ hiring announcements.
+    NO curated repository. NO Yahoo/DuckDuckGo fallbacks.
+    Results are strictly filtered and ranked by 6-factor ATS match score
+    computed from the candidate's uploaded resume profile.
+    Includes per-job skill gap analysis with projected improvement scores.
+    """
+    try:
+        return await service.linkedin_resume_match_async(
+            candidate_profile_id=candidate_profile_id,
+            location=location,
+            timeframe=timeframe,
+            max_results=max_results,
+            min_match_score=min_match_score,
+            remote_only=remote_only,
+            debug=debug,
+        )
+    except Exception as e:
+        logger.error(f"❌ [REST linkedin-resume-match Error]: {e}")
+        return {
+            "status": "error",
+            "candidate_profile_id": candidate_profile_id,
+            "count": 0,
+            "results": [],
+            "message": f"linkedin_resume_match encountered an exception: {str(e)}"
         }
 
 

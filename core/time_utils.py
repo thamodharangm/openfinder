@@ -13,10 +13,8 @@ Features:
 
 from datetime import datetime, timedelta, timezone
 import logging
-from pathlib import Path
 import re
-import sys
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 from bs4 import BeautifulSoup
 

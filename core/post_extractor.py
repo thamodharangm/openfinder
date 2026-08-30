@@ -17,7 +17,7 @@ import logging
 from pathlib import Path
 import re
 import sys
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set
 
 from bs4 import BeautifulSoup
 import httpx
@@ -37,7 +37,6 @@ from core.hiring_intent import (
 from core.spam_filter import calculate_hiring_intent_score
 
 from core.linkedin_urls import (
-    extract_activity_id,
     extract_author_handle,
     is_valid_linkedin_post_url,
     normalize_linkedin_post_url,
@@ -45,7 +44,6 @@ from core.linkedin_urls import (
 from core.matcher import JobMatcher, canonicalize_skill
 from core.pitch_generator import OutreachPitchGenerator
 from core.time_utils import (
-    FRESHNESS_WINDOWS,
     calculate_age,
     extract_snowflake_timestamp,
     get_max_age_minutes,

@@ -13,12 +13,11 @@ Features:
 
 import logging
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.hiring_intent import (
     ExperienceRelevanceMatcher,
     LocationRelevanceMatcher,
-    QualityScorer,
     RoleRelevanceMatcher,
 )
 from core.matcher import JobMatcher

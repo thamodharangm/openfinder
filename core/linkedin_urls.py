@@ -13,7 +13,7 @@ Features:
 
 import base64
 import re
-from typing import Optional, Set, Tuple
+from typing import Optional
 import urllib.parse
 
 # Pre-compiled high-performance regular expressions

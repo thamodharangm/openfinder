@@ -18,13 +18,13 @@ import logging
 from pathlib import Path
 import re
 import sys
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set
 
 import pypdf
 
 # Ensure root in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from config import COMMON_SKILLS, MAX_RESUME_FILE_BYTES, SKILL_TAXONOMY
+from config import MAX_RESUME_FILE_BYTES, SKILL_TAXONOMY
 from core.matcher import canonicalize_skill
 
 logger = logging.getLogger(__name__)

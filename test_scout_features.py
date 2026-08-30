@@ -5,15 +5,12 @@ Automated test suite verifying the 7 Pillars & AI Hiring Intent Classifier.
 """
 
 import unittest
-from datetime import datetime, timezone
 
 from core.ai_classifier import AIHiringIntentClassifier
-from core.linkedin_urls import compute_post_fingerprint, extract_activity_id, normalize_linkedin_post_url
+from core.linkedin_urls import compute_post_fingerprint
 from core.post_extractor import LinkedInPostExtractor
-from core.ranking import OpportunityRanker
 from core.search_intent import SearchIntentParser
 from core.service import OpenFinderService
-from core.spam_filter import calculate_hiring_intent_score
 from core.time_utils import calculate_freshness_score
 
 

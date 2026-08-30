@@ -28,11 +28,10 @@ Architecture:
 
 import asyncio
 import json
-import logging
 import os
 from pathlib import Path
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 # Ensure UTF-8 stdout/stderr on Windows terminals
 if sys.platform == "win32":
@@ -341,6 +340,54 @@ TOOLS = [
         }
     },
     {
+        "name": "linkedin_resume_match",
+        "description": (
+            "LinkedIn-Session-Exclusive, Resume-Mandatory Opportunity Finder. "
+            "Fetches ONLY live, authenticated LinkedIn /posts/ hiring announcements — "
+            "NO curated repository, NO Yahoo/DuckDuckGo search engine fallbacks. "
+            "Results are strictly filtered and ranked by 6-factor ATS match score computed from "
+            "the candidate's uploaded resume. Each result includes matched skills, missing skills, "
+            "projected score if upskilled, and auto-generated outreach pitches for posts with recruiter emails. "
+            "Requires: (1) resume uploaded via upload_resume or upload_resume_text, "
+            "(2) LINKEDIN_LI_AT session cookie configured in .env."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "candidate_profile_id": {
+                    "type": "string",
+                    "description": "Mandatory — ID returned by upload_resume or upload_resume_text"
+                },
+                "location": {
+                    "type": "string",
+                    "description": "Target city/country (e.g. 'Bangalore', 'Remote', 'India')",
+                    "default": "India"
+                },
+                "timeframe": {
+                    "type": "string",
+                    "description": "Freshness window: 'past-1h', 'past-4h', 'past-12h', 'past-24h', 'past-7d'",
+                    "default": "past-24h"
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Max opportunities to return (default: 20, max: 50)",
+                    "default": 20
+                },
+                "min_match_score": {
+                    "type": "integer",
+                    "description": "Minimum ATS resume match score 0-100 to include a result (default: 40)",
+                    "default": 40
+                },
+                "remote_only": {
+                    "type": "boolean",
+                    "description": "If true, return only remote-friendly positions",
+                    "default": False
+                }
+            },
+            "required": ["candidate_profile_id"]
+        }
+    },
+    {
         "name": "bulk_harvest_opportunities",
         "description": "Performs wide-matrix parallel search and deep pagination to harvest 50-200+ verified hiring posts with composite deduplication, numerical intent scoring (>=60), and ATS ranking.",
         "inputSchema": {
@@ -555,6 +602,17 @@ async def handle_tool(name: str, args: Dict[str, Any]) -> str:
         table = LinkedInFinder.format_as_markdown_table(posts)
         return json.dumps({"status": "success", "count": len(posts), "markdown_table": table, "posts": posts}, ensure_ascii=False, indent=2)
 
+    elif name == "linkedin_resume_match":
+        res = await service.linkedin_resume_match_async(
+            candidate_profile_id=args.get("candidate_profile_id", ""),
+            location=args.get("location", "India"),
+            timeframe=args.get("timeframe", "past-24h"),
+            max_results=int(args.get("max_results", 20)),
+            min_match_score=int(args.get("min_match_score", 40)),
+            remote_only=bool(args.get("remote_only", False)),
+        )
+        return json.dumps(res, ensure_ascii=False, indent=2)
+
     elif name == "bulk_harvest_opportunities":
         res = await service.bulk_harvest_opportunities_async(
             roles=args.get("roles"),
@@ -624,7 +682,7 @@ async def main():
                 "result": {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "openfinder", "version": "2.0.0"}
+                    "serverInfo": {"name": "openfinder", "version": "3.0.0"}
                 }
             })
 

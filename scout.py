@@ -15,10 +15,8 @@ Capabilities:
 import argparse
 import json
 import logging
-import os
 from pathlib import Path
 import sys
-from typing import Any, Dict, List, Optional
 
 # Ensure UTF-8 stdout on Windows terminals
 if sys.platform == "win32":
@@ -39,7 +37,6 @@ load_dotenv()
 from core.linkedin_finder import LinkedInFinder
 from core.pitch_generator import OutreachPitchGenerator
 from core.post_extractor import LinkedInPostExtractor
-from core.resume_parser import ResumeParser
 from core.service import OpenFinderService
 
 logging.basicConfig(level=logging.WARNING)

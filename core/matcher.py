@@ -11,11 +11,10 @@ Features:
 - Actionable ATS resume tailoring recommendations and candidate fit grading.
 """
 
-from collections import defaultdict
 from difflib import SequenceMatcher
 import logging
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 

@@ -75,12 +75,13 @@ flowchart TD
 
 ---
 
-## 🛠️ MCP Tools Suite (11 Official Tools)
+## 🛠️ MCP Tools Suite (12 Official Tools)
 
-When connected to **Claude Desktop**, **Antigravity**, or **Claude Web**, OpenFinder exposes 11 production tools:
+When connected to **Claude Desktop**, **Antigravity**, or **Claude Web**, OpenFinder exposes 12 production tools:
 
 | Tool Name | Parameters | Description |
 | :--- | :--- | :--- |
+| `linkedin_resume_match` | `candidate_profile_id`, `location`, `timeframe`, `max_results`, `min_match_score`, `remote_only` | 🆕 **LinkedIn-Session-Exclusive, Resume-Mandatory Search**: Fetches ONLY live authenticated LinkedIn `/posts/` — no curated repo, no search engine fallbacks. Ranks by 6-factor ATS match score from your uploaded resume. Each result includes matched skills, missing skills, projected score if upskilled, and auto-generated outreach pitches. |
 | `bulk_harvest_opportunities` | `roles`, `locations`, `timeframe`, `target_count`, `min_intent_score`, `candidate_profile_id` | **Bulk Harvester**: Wide-matrix parallel search and deep pagination harvesting (50–200+ verified posts) with composite deduplication and numerical intent scoring (`>=60`). |
 | `search_opportunities` | `query`, `location`, `timeframe`, `max_results`, `candidate_profile_id` | **Primary Search**: Discovers live recruiter posts with ATS match scores, HR contacts, and outreach pitches. |
 | `upload_resume_text` | `resume_text` | Ingests plain-text CV and saves a candidate profile in SQLite. |

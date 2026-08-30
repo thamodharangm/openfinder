@@ -20,7 +20,7 @@ import logging
 from pathlib import Path
 import re
 import sys
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # Add parent dir to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))

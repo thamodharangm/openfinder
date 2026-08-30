@@ -19,7 +19,7 @@ import logging
 from pathlib import Path
 import re
 import sys
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple
 import urllib.parse
 
 from bs4 import BeautifulSoup
@@ -33,12 +33,10 @@ from core.linkedin_session import LinkedInSessionSearch
 from core.linkedin_urls import is_valid_linkedin_post_url, normalize_linkedin_post_url
 from core.post_extractor import LinkedInPostExtractor
 from core.ranking import OpportunityRanker
-from core.search_intent import SearchIntent, SearchIntentParser
+from core.search_intent import SearchIntentParser
 from core.time_utils import (
-    FRESHNESS_WINDOWS,
     calculate_age,
     extract_snowflake_timestamp,
-    get_max_age_minutes,
     is_within_window,
     parse_timestamp,
 )

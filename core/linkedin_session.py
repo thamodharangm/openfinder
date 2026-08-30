@@ -14,7 +14,6 @@ Features:
 
 import asyncio
 from collections import OrderedDict
-import json
 import logging
 import os
 from pathlib import Path
@@ -36,12 +35,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import COMMON_SKILLS
 from core.linkedin_urls import is_valid_linkedin_post_url, normalize_linkedin_post_url
 from core.post_extractor import LinkedInPostExtractor
-from core.search_intent import SearchIntent, SearchIntentParser
+from core.search_intent import SearchIntentParser
 from core.time_utils import (
-    FRESHNESS_WINDOWS,
-    calculate_age,
     extract_snowflake_timestamp,
-    get_max_age_minutes,
     is_within_window,
 )
 

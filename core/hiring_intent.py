@@ -13,11 +13,10 @@ Features:
 - Deterministic multi-factor scoring with clear explainability reasons.
 """
 
-from dataclasses import dataclass
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # Add root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
