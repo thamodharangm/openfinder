@@ -336,6 +336,10 @@ class JobMatcher:
                     missing_skills_set.add(req_skill)
 
             tech_score = (total_credit / len(req_set)) * 100.0
+            # If candidate matches 2+ core required skills, provide strong stack alignment baseline
+            if len(exact_matches) >= 2:
+                base_alignment = min(95.0, 65.0 + (len(exact_matches) * 10.0))
+                tech_score = max(tech_score, base_alignment)
             tech_score = max(0.0, min(100.0, tech_score))
         else:
             matched_skills_set.update(cand_skills_canon[:4])

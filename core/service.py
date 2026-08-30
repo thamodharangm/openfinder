@@ -763,11 +763,16 @@ class OpenFinderService:
             # Auto-generate 1-click recruiter outreach pitch suite if emails are extracted
             if p.get("recruiter_emails") and not p.get("tailored_outreach_pitches"):
                 try:
+                    clean_pitch_role = re.sub(r'#\S+', '', role_val).strip()
+                    clean_pitch_role = re.sub(r'\s+', ' ', clean_pitch_role).strip()
+                    if len(clean_pitch_role) < 4 or clean_pitch_role.lower() in ["alert", "for", "hiring", "immediate", "job opening"]:
+                        clean_pitch_role = roles_list[0] if roles_list else "MERN Stack Developer"
+
                     p["tailored_outreach_pitches"] = OutreachPitchGenerator.generate_suite(
-                        job_title=role_val,
+                        job_title=clean_pitch_role,
                         company_name=p.get("company", "Hiring Team"),
                         matched_skills=p.get("skills", []),
-                        candidate_name=resolved_profile.get("candidate_name", "Candidate") if resolved_profile else "Candidate",
+                        candidate_name=resolved_profile.get("candidate_name", "Thamodharan Ganesan") if resolved_profile else "Thamodharan Ganesan",
                         candidate_exp_years=resolved_profile.get("years_of_experience", 2) if resolved_profile else 2,
                         recipient_name=p.get("author", "Hiring Team"),
                         recipient_email=p["recruiter_emails"][0]
@@ -849,11 +854,16 @@ class OpenFinderService:
 
                     if p.get("recruiter_emails") and not p.get("tailored_outreach_pitches"):
                         try:
+                            clean_pitch_role = re.sub(r'#\S+', '', role_val).strip()
+                            clean_pitch_role = re.sub(r'\s+', ' ', clean_pitch_role).strip()
+                            if len(clean_pitch_role) < 4 or clean_pitch_role.lower() in ["alert", "for", "hiring", "immediate", "job opening"]:
+                                clean_pitch_role = roles_list[0] if roles_list else "MERN Stack Developer"
+
                             p["tailored_outreach_pitches"] = OutreachPitchGenerator.generate_suite(
-                                job_title=role_val,
+                                job_title=clean_pitch_role,
                                 company_name=p.get("company", "Hiring Team"),
                                 matched_skills=p.get("skills", []),
-                                candidate_name=resolved_profile.get("candidate_name", "Candidate") if resolved_profile else "Candidate",
+                                candidate_name=resolved_profile.get("candidate_name", "Thamodharan Ganesan") if resolved_profile else "Thamodharan Ganesan",
                                 candidate_exp_years=resolved_profile.get("years_of_experience", 2) if resolved_profile else 2,
                                 recipient_name=p.get("author", "Hiring Team"),
                                 recipient_email=p["recruiter_emails"][0]
