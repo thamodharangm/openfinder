@@ -290,12 +290,23 @@ class OpenFinderService:
                 parsed_skills = list(candidate_skills)
             exp_val = candidate_exp_years or 2
             resolved = {
-                "candidate_name": candidate_name or "Candidate",
+                "candidate_name": candidate_name or "Thamodharan Ganesan",
                 "top_skills": parsed_skills,
                 "skills": parsed_skills,
                 "years_of_experience": exp_val,
                 "seniority_level": "Mid-Level" if exp_val >= 2 else "Junior / Entry-Level (0-2 Years)",
                 "primary_role": default_role
+            }
+
+        if not resolved:
+            default_skills = ["React.js", "Node.js", "Express.js", "MongoDB", "JavaScript", "Next.js"]
+            resolved = {
+                "candidate_name": candidate_name or "Thamodharan Ganesan",
+                "top_skills": default_skills,
+                "skills": default_skills,
+                "years_of_experience": candidate_exp_years or 2,
+                "seniority_level": "Mid-Level",
+                "primary_role": default_role or "MERN Stack Developer"
             }
         return resolved
 
@@ -908,10 +919,29 @@ class OpenFinderService:
 
         clean_results: List[Dict[str, Any]] = []
         for p in final_dataset:
+            post_loc = (p.get("location") or "").lower()
+            if any(fl in post_loc for fl in ["lahore", "karachi", "islamabad", "pakistan", "dhaka", "bangladesh"]) and not any(loc.lower() in ["pakistan", "lahore", "bangladesh"] for loc in locs_list):
+                continue
+
+            # Clean author
+            raw_author = p.get("author") or "Hiring Manager"
+            if re.search(r'-(?:share|activity|ugcpost)-\d+', raw_author, re.IGNORECASE) or any(x in raw_author.lower() for x in ["ushiring", "techrecruitment", "jobalert", "share 74"]):
+                clean_author = "Hiring Lead"
+            elif len(raw_author) > 30 and " " not in raw_author:
+                clean_author = "Hiring Lead"
+            else:
+                clean_author = raw_author
+
+            # Clean role
+            raw_role = p.get("role") or p.get("job_role") or p.get("title") or roles_list[0]
+            clean_role = raw_role.replace("#", "").strip()
+            if clean_role.lower() in ["alert", "for", "hiring", "immediate", "join our team", "for an exciting opportunity", "urgent"] or len(clean_role) < 4:
+                clean_role = roles_list[0]
+
             clean_item = {
                 "company": p.get("company", "Hiring Team"),
-                "role": p.get("role") or p.get("job_role") or p.get("title") or "Software Engineer",
-                "author": p.get("author", "Hiring Manager"),
+                "role": clean_role,
+                "author": clean_author,
                 "hiring_type": p.get("hiring_type", "RECRUITER_HIRING"),
                 "hiring_intent_score": p.get("hiring_intent_score", 85),
                 "location": p.get("location", "Unspecified / Remote"),

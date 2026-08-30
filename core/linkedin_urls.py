@@ -188,8 +188,15 @@ def extract_author_handle(url: str) -> Optional[str]:
             handle = slug.split("_")[0].strip()
             if handle and handle.lower() != "activity":
                 return handle
-        elif not slug.lower().startswith("activity-"):
-            return slug.strip()
+        else:
+            # Strip trailing -share-..., -activity-..., -ugcPost-..., -ugcpost-...
+            clean_slug = re.sub(r'-(?:share|activity|ugcpost|ugcPost)-\d+.*$', '', slug, flags=re.IGNORECASE).strip()
+            if clean_slug and not clean_slug.lower().startswith("activity-"):
+                # If slug is composed purely of generic recruitment hashtags/words, reject it
+                spam_keywords = ["ushiring", "techrecruitment", "jobalert", "hiringalert", "freelance-jobs", "careerbeeindia", "developerjobs"]
+                if any(k in clean_slug.lower() for k in spam_keywords) or len(clean_slug) > 35:
+                    return None
+                return clean_slug.strip()
 
     return None
 

@@ -79,7 +79,10 @@ class JobRoleExtractor:
         "immediate joiner", "immediate joiners", "freshers", "experienced",
         "passionate people", "talent", "someone", "anyone", "professionals",
         "rockstars", "ninjas", "enthusiasts", "our team", "our engineering team",
-        "our company", "our client", "our office", "our bangalore engineering team"
+        "our company", "our client", "our office", "our bangalore engineering team",
+        "alert", "hiring alert", "for", "join our team", "immediate", "urgent",
+        "good understanding of azure devops", "for an exciting opportunity", "an exciting opportunity",
+        "hiring", "immediate hiring", "job opening", "job alert"
     }
 
     _SPLIT_DELIMITERS = re.compile(
@@ -100,6 +103,8 @@ class JobRoleExtractor:
 
         def _add_role(role_candidate: str):
             clean = re.sub(r"\s+", " ", role_candidate).strip()
+            # Strip hashtag signs and noise
+            clean = clean.replace("#", "").strip()
             # Split off common trailing noise like location, experience, or brackets
             clean = cls._SPLIT_DELIMITERS.split(clean)[0].strip()
             # Strip trailing punctuation
@@ -113,7 +118,7 @@ class JobRoleExtractor:
                 return
 
             if (
-                len(clean) >= 3
+                len(clean) >= 4
                 and clean_lower not in seen_roles_lower
                 and clean_lower not in cls._INVALID_ROLE_FRAGMENTS
                 and not clean_lower.isdigit()
