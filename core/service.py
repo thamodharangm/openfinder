@@ -658,12 +658,26 @@ class OpenFinderService:
         yield_tracker = QueryYieldTracker()
         now_utc = datetime.now(timezone.utc)
         seen_keys: Set[str] = set()
+        seen_urls: Set[str] = set()
         verified_hiring_posts: List[Dict[str, Any]] = []
         total_harvested_raw = 0
         rejected_intent_count = 0
         duplicates_count = 0
         waves_executed = 0
         stop_reason = "target_reached"
+
+        # Build tech relevance tokens from requested roles
+        req_tech_tokens: Set[str] = set()
+        for r in roles_list:
+            for tok in re.split(r'[\s/,-]+', r.lower()):
+                if len(tok) >= 3 and tok not in ["developer", "engineer", "lead", "specialist", "hiring", "team", "senior", "junior"]:
+                    req_tech_tokens.add(tok)
+
+        def is_tech_relevant(post_role: str, content: str) -> bool:
+            if not req_tech_tokens:
+                return True
+            combo = f"{post_role} {content[:400]}".lower()
+            return any(tok in combo for tok in req_tech_tokens)
 
         # Wave 1: Primary Query Matrix Harvesting
         waves_executed += 1
@@ -682,20 +696,27 @@ class OpenFinderService:
             if not u:
                 continue
 
+            norm_u = normalize_linkedin_post_url(u) or u
             author = (p.get("author") or "").strip().lower()
             company = (p.get("company") or "").strip().lower()
-            dedupe_key = f"{u}::{author}::{company}"
+            dedupe_key = f"{norm_u}::{author}::{company}"
 
-            if dedupe_key in seen_keys:
+            if dedupe_key in seen_keys or norm_u in seen_urls:
                 duplicates_count += 1
                 continue
             seen_keys.add(dedupe_key)
+            seen_urls.add(norm_u)
 
             snippet_text = p.get("full_post_content") or p.get("raw_text") or p.get("snippet") or p.get("title") or ""
             author_title = p.get("author_title") or p.get("author_headline") or ""
             author_name = p.get("author") or ""
             role_val = p.get("role") or p.get("job_role") or p.get("title") or roles_list[0]
             p["role"] = role_val
+
+            # Enforce strict tech role relevance (filters out off-target C++, Azure DevOps, etc.)
+            if not is_tech_relevant(role_val, snippet_text):
+                rejected_intent_count += 1
+                continue
 
             intent_eval = HiringIntentScorer.evaluate(snippet_text, author_title, author_name)
             p["hiring_intent_score"] = intent_eval.score
@@ -771,19 +792,26 @@ class OpenFinderService:
                     u = p.get("post_url")
                     if not u:
                         continue
+                    norm_u = normalize_linkedin_post_url(u) or u
                     author = (p.get("author") or "").strip().lower()
                     company = (p.get("company") or "").strip().lower()
-                    dedupe_key = f"{u}::{author}::{company}"
-                    if dedupe_key in seen_keys:
+                    dedupe_key = f"{norm_u}::{author}::{company}"
+                    if dedupe_key in seen_keys or norm_u in seen_urls:
                         duplicates_count += 1
                         continue
                     seen_keys.add(dedupe_key)
+                    seen_urls.add(norm_u)
 
                     snippet_text = p.get("full_post_content") or p.get("raw_text") or p.get("snippet") or p.get("title") or ""
                     author_title = p.get("author_title") or p.get("author_headline") or ""
                     author_name = p.get("author") or ""
                     role_val = p.get("role") or p.get("job_role") or p.get("title") or roles_list[0]
                     p["role"] = role_val
+
+                    # Enforce strict tech role relevance
+                    if not is_tech_relevant(role_val, snippet_text):
+                        rejected_intent_count += 1
+                        continue
 
                     intent_eval = HiringIntentScorer.evaluate(snippet_text, author_title, author_name)
                     p["hiring_intent_score"] = intent_eval.score
@@ -822,16 +850,17 @@ class OpenFinderService:
 
                     verified_hiring_posts.append(p)
 
-        # Fallback blend if verified count is low
-        if len(verified_hiring_posts) < 10:
+        # Fallback blend strictly if verified count is low, with unique URL enforcement
+        if len(verified_hiring_posts) < 5:
             for r in roles_list[:2]:
                 for loc in locs_list[:2]:
-                    curated = get_curated_posts(role=r, location=loc, max_count=10)
+                    curated = get_curated_posts(role=r, location=loc, max_count=5)
                     for cp in curated:
                         u = cp.get("url")
-                        if u and u not in seen_keys:
-                            seen_keys.add(u)
-                            snow_dt = extract_snowflake_timestamp(u)
+                        norm_u = normalize_linkedin_post_url(u) or u if u else None
+                        if norm_u and norm_u not in seen_urls:
+                            seen_urls.add(norm_u)
+                            snow_dt = extract_snowflake_timestamp(norm_u)
                             age_hours = (now_utc - snow_dt).total_seconds() / 3600.0 if snow_dt else 12.0
                             verified_hiring_posts.append({
                                 "title": cp.get("role", r),
@@ -842,7 +871,7 @@ class OpenFinderService:
                                 "work_mode": cp.get("work_mode", "Hybrid"),
                                 "recruiter_emails": cp.get("recruiter_emails", []),
                                 "contact_numbers": [],
-                                "post_url": u,
+                                "post_url": norm_u,
                                 "age_minutes": int(age_hours * 60),
                                 "posted_time": f"{int(age_hours)}h ago" if age_hours < 24 else f"{int(age_hours//24)}d ago",
                                 "skills": cp.get("keywords", []),
