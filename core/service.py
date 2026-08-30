@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 import logging
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
 import time
@@ -35,6 +36,7 @@ from config import DEFAULT_LOCATION, DEFAULT_MAX_RESULTS, DEFAULT_TIMEFRAME, Err
 from core.adaptive_harvester import DynamicKeywordExtractor, QueryYieldTracker
 from core.linkedin_finder import LinkedInFinder
 from core.linkedin_session import LinkedInSessionSearch
+from core.linkedin_urls import is_valid_linkedin_post_url, normalize_linkedin_post_url
 from core.live_repository import get_curated_posts
 from core.pitch_generator import OutreachPitchGenerator
 from core.post_extractor import LinkedInPostExtractor
