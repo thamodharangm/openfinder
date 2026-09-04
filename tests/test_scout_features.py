@@ -1,10 +1,17 @@
 """
-test_scout_features.py
-=======================
+tests/test_scout_features.py
+=============================
 Automated test suite verifying the 7 Pillars & AI Hiring Intent Classifier.
 """
 
+from pathlib import Path
+import sys
 import unittest
+
+# Ensure root in sys.path
+BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
 from core.ai_classifier import AIHiringIntentClassifier
 from core.linkedin_urls import compute_post_fingerprint
@@ -21,7 +28,6 @@ class TestScoutFeatures(unittest.TestCase):
         dorks = intent.generate_dork_queries()
         self.assertTrue(len(dorks) >= 3)
         self.assertTrue(any('-("open to work"' in d for d in dorks))
-
 
     def test_freshness_half_life_scoring(self):
         score_15m = calculate_freshness_score(15, max_age_minutes=1440)

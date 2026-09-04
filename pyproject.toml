@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openfinder"
+version = "2.0.0"
+description = "Universal MCP Job Connector & Real-Time LinkedIn Recruiter Hiring Scout"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "OpenFinder Contributors" }
+]
+keywords = ["mcp", "linkedin", "job-search", "recruiter-outreach", "ats-matcher", "fastapi", "claude", "chatgpt"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Internet :: WWW/HTTP :: Dynamic Content",
+]
+dependencies = [
+    "mcp>=1.0.0,<2.0.0",
+    "pypdf>=4.0.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=5.0.0",
+    "httpx>=0.27.0",
+    "duckduckgo-search>=6.0.0",
+    "requests>=2.31.0",
+    "nest-asyncio>=1.6.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.28.0",
+    "python-multipart>=0.0.9",
+]
+
+[project.scripts]
+openfinder = "scout:main"
+openfinder-scout = "scout:main"
+openfinder-server = "server:run_main"
+openfinder-api = "api_server:main"
+
+[tool.setuptools]
+py-modules = ["scout", "server", "api_server", "config"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["core*"]

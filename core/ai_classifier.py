@@ -12,6 +12,7 @@ Features:
 - Microsecond heuristic pre-filter and fallback to guarantee zero-downtime reliability.
 """
 
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 import hashlib
 import json
@@ -92,10 +93,19 @@ Output ONLY valid JSON."""
         self.openai_key = os.environ.get("OPENAI_API_KEY")
         self._init_db()
 
+    @contextmanager
+    def _get_connection(self):
+        """Opens an SQLite connection and guarantees closure."""
+        conn = sqlite3.connect(self.db_path, timeout=5.0)
+        try:
+            yield conn
+        finally:
+            conn.close()
+
     def _init_db(self):
         """Initializes SQLite cache table for AI classifications."""
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with self._get_connection() as conn:
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS ai_intent_cache (
                         post_hash TEXT PRIMARY KEY,
@@ -116,7 +126,7 @@ Output ONLY valid JSON."""
 
     def _get_cached(self, post_hash: str) -> Optional[AIHiringClassification]:
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT classification_json FROM ai_intent_cache WHERE post_hash = ?", (post_hash,))
                 row = cursor.fetchone()
@@ -129,7 +139,7 @@ Output ONLY valid JSON."""
 
     def _set_cached(self, post_hash: str, url: str, classification: AIHiringClassification):
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with self._get_connection() as conn:
                 conn.execute(
                     "INSERT OR REPLACE INTO ai_intent_cache (post_hash, url, classification_json, engine, created_at) VALUES (?, ?, ?, ?, ?)",
                     (post_hash, url, json.dumps(classification.to_dict()), classification.engine_used, int(time.time()))

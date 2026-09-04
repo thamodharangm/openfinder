@@ -13,6 +13,7 @@ Features:
 """
 
 from collections import OrderedDict
+from contextlib import contextmanager
 import json
 import logging
 from pathlib import Path
@@ -47,8 +48,9 @@ class CandidateProfileStore:
 
         self._init_db()
 
-    def _get_connection(self) -> sqlite3.Connection:
-        """Opens a SQLite connection tuned for high performance."""
+    @contextmanager
+    def _get_connection(self):
+        """Opens a SQLite connection tuned for high performance and guarantees closure."""
         conn = sqlite3.connect(
             str(self.db_path),
             timeout=5.0,
@@ -57,7 +59,11 @@ class CandidateProfileStore:
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
         conn.execute("PRAGMA temp_store=MEMORY;")
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _init_db(self) -> None:
         """Initializes table schema and handles seamless column auto-migrations."""

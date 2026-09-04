@@ -13,6 +13,7 @@ Features:
 """
 
 from collections import OrderedDict
+from contextlib import contextmanager
 import json
 import logging
 from pathlib import Path
@@ -194,8 +195,9 @@ class SearchCache:
 
         self._init_db()
 
-    def _get_connection(self, timeout: float = 5.0) -> sqlite3.Connection:
-        """Creates an optimized SQLite connection with WAL mode and memory pragma settings."""
+    @contextmanager
+    def _get_connection(self, timeout: float = 5.0):
+        """Creates an optimized SQLite connection with WAL mode, memory pragma settings, and guaranteed closure."""
         conn = sqlite3.connect(self.db_path, timeout=timeout, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         # WAL mode & high-throughput concurrency settings
@@ -204,7 +206,11 @@ class SearchCache:
         conn.execute("PRAGMA busy_timeout=5000;")
         conn.execute("PRAGMA temp_store=MEMORY;")
         conn.execute("PRAGMA mmap_size=268435456;")  # 256MB memory map
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _init_db(self):
         """Initializes SQLite schema, migrations, and performance indexes safely."""
@@ -487,7 +493,7 @@ class SearchCache:
             return False
         try:
             with self._lock:
-                with sqlite3.connect(self.db_path, timeout=10.0) as conn:
+                with self._get_connection(timeout=10.0) as conn:
                     conn.execute("VACUUM;")
             return True
         except Exception as e:

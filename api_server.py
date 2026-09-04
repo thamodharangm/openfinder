@@ -1033,7 +1033,12 @@ def custom_openapi():
 app.openapi = custom_openapi
 
 
-if __name__ == "__main__":
+def main():
     import uvicorn
-    print("🚀 Starting OpenFinder v2.0 Universal Dual Protocol Server on http://127.0.0.1:8000 ...")
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    from config import SERVER_HOST, SERVER_PORT
+    print(f"🚀 Starting OpenFinder v2.0 Universal Dual Protocol Server on http://{SERVER_HOST}:{SERVER_PORT} ...")
+    uvicorn.run("api_server:app", host=SERVER_HOST, port=SERVER_PORT)
+
+
+if __name__ == "__main__":
+    main()
